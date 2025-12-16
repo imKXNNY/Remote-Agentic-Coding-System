@@ -195,8 +195,62 @@ DEFAULT_AI_ASSISTANT=codex
 
 </details>
 
+<details>
+<summary><b>🪐 Gemini (CLI)</b></summary>
+
+**Goal:** keep Gemini “credit free” by running the open-source [Gemini CLI](https://github.com/google-gemini/gemini-cli) locally instead of calling the hosted API directly.
+
+**Quick start:**
+
+```bash
+npm install -g @google/gemini-cli   # or: brew install gemini-cli
+gemini login                        # OAuth flow, stores tokens under ~/.gemini/
+```
+
+**Optional `.env` helpers:**
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `GEMINI_CLI_PATH` | Override the binary path (defaults to `gemini` on `$PATH`). | `/usr/local/bin/gemini` |
+| `GEMINI_CLI_ARGS` | Extra CLI flags appended on every run (comma-separated). | `--yolo,--model=gemini-2.5-flash` |
+
+The CLI manages authentication, quotas, and tool approvals itself. The Remote Coding Agent simply spawns it with `--output-format stream-json` and streams the resulting JSON events back to Telegram/GitHub.
+
+**Docker deployments:**
+- The published Docker image already bakes in `@google/gemini-cli@0.21.0`, so you don’t need to install it on the host.
+- After building containers, run `docker compose exec app gemini --version` (or `app-with-db` if you use that profile) to confirm availability, then run `docker compose exec app gemini login`.
+- Persist CLI auth tokens by mounting a host folder or named volume into `/home/appuser/.gemini`:
+
+  ```yaml
+  services:
+    app:
+      volumes:
+        - ${WORKSPACE_PATH:-./workspace}:/workspace
+        - ./gemini:/home/appuser/.gemini   # persists CLI login data
+  ```
+
+  Replace `./gemini` with an absolute path if preferred. See [docs/assistants/gemini.md](docs/assistants/gemini.md#docker-deployments) for additional options such as overriding `GEMINI_CLI_PATH`.
+
+**Validate the CLI:**
+
+```bash
+gemini --output-format stream-json --prompt "Gemini CLI smoke test" | head
+```
+
+You should see events such as `{ "type": "init", ... }` followed by `message` and `result`. Fix any CLI login prompts locally before starting the Remote Coding Agent.
+
+**Set as default assistant (optional):**
+
+```env
+DEFAULT_AI_ASSISTANT=gemini
+```
+
+📚 Full guide: [docs/assistants/gemini.md](docs/assistants/gemini.md)
+
+</details>
+
 **How Assistant Selection Works:**
-- Assistant type is set per codebase (auto-detected from `.claude/commands/` or `.codex/` folders)
+- Assistant type is set per codebase (auto-detected from `.claude/commands/`, `.codex/`, or `.gemini/commands/` folders)
 - Once a conversation starts, the assistant type is locked for that conversation
 - `DEFAULT_AI_ASSISTANT` (optional) is used only for new conversations without codebase context
 
@@ -385,6 +439,8 @@ Run directly with Node.js (requires local PostgreSQL or remote `DATABASE_URL` in
 ```bash
 npm run dev
 ```
+
+> 💡 **Gemini CLI in Docker:** The image already bundles `@google/gemini-cli`, so you only need to authenticate inside the container once. Run `docker compose exec app gemini login` (or `app-with-db` if using that profile), then mount a host directory to `/home/appuser/.gemini` so credentials survive restarts.
 
 **Stop the application:**
 

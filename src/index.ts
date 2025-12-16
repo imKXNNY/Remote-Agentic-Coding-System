@@ -8,6 +8,7 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 import express from 'express';
+import { spawnSync } from 'child_process';
 import { TelegramAdapter } from './adapters/telegram';
 import { TestAdapter } from './adapters/test';
 import { GitHubAdapter } from './adapters/github';
@@ -30,9 +31,14 @@ async function main(): Promise<void> {
   // Validate AI assistant credentials (warn if missing, don't fail)
   const hasClaudeCredentials = process.env.CLAUDE_API_KEY || process.env.CLAUDE_CODE_OAUTH_TOKEN;
   const hasCodexCredentials = process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN;
+  const geminiBinary = process.env.GEMINI_CLI_PATH || 'gemini';
+  const hasGeminiCli = isGeminiCliAvailable(geminiBinary);
+  const defaultAssistant = process.env.DEFAULT_AI_ASSISTANT || 'claude';
 
-  if (!hasClaudeCredentials && !hasCodexCredentials) {
-    console.error('[App] No AI assistant credentials found. Set Claude or Codex credentials.');
+  if (!hasClaudeCredentials && !hasCodexCredentials && !hasGeminiCli) {
+    console.error(
+      '[App] No AI assistant credentials found. Install/configure Claude, Codex, or Gemini CLI.'
+    );
     process.exit(1);
   }
 
@@ -42,11 +48,35 @@ async function main(): Promise<void> {
   if (!hasCodexCredentials) {
     console.warn('[App] Codex credentials not found. Codex assistant will be unavailable.');
   }
+  if (!hasGeminiCli) {
+    const warning = `[App] Gemini CLI not found (expected binary: ${geminiBinary}). Gemini assistant will be unavailable.`;
+    if (defaultAssistant === 'gemini') {
+      console.error(
+        `${warning} DEFAULT_AI_ASSISTANT is set to gemini, so the server cannot start. Install the gemini CLI inside this environment or point GEMINI_CLI_PATH to a valid binary.`
+      );
+      process.exit(1);
+    } else {
+      console.warn(warning);
+    }
+  }
 
   // Test database connection
   try {
     await pool.query('SELECT 1');
     console.log('[Database] Connected successfully');
+
+    if (!hasGeminiCli) {
+      const { rows } = await pool.query<{ count: string }>(
+        'SELECT COUNT(*)::int AS count FROM remote_agent_codebases WHERE ai_assistant_type = \'gemini\''
+      );
+      const geminiCodebases = Number(rows[0]?.count || 0);
+      if (geminiCodebases > 0) {
+        console.error(
+          `[App] ${geminiCodebases} codebase(s) are configured for Gemini but the gemini CLI (${geminiBinary}) is unavailable. Install the CLI in this container or provide a valid GEMINI_CLI_PATH.`
+        );
+        process.exit(1);
+      }
+    }
   } catch (error) {
     console.error('[Database] Connection failed:', error);
     process.exit(1);
@@ -209,6 +239,15 @@ async function main(): Promise<void> {
   console.log('[App] Remote Coding Agent is ready!');
   console.log('[App] Send messages to your Telegram bot to get started');
   console.log('[App] Test endpoint available: POST http://localhost:' + port + '/test/message');
+}
+
+function isGeminiCliAvailable(binary: string): boolean {
+  try {
+    const result = spawnSync(binary, ['--version'], { stdio: 'ignore' });
+    return result.status === 0;
+  } catch {
+    return false;
+  }
 }
 
 // Run the application

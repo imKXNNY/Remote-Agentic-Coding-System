@@ -4,7 +4,7 @@
  */
 import { Octokit } from '@octokit/rest';
 import { createHmac } from 'crypto';
-import { IPlatformAdapter } from '../types';
+import { Codebase, IPlatformAdapter } from '../types';
 import { handleMessage } from '../orchestrator/orchestrator';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
@@ -262,10 +262,10 @@ export class GitHubAdapter implements IPlatformAdapter {
   }
 
   /**
-   * Auto-detect and load commands from .claude/commands or .agents/commands
+   * Auto-detect and load commands from assistant-specific folders
    */
   private async autoDetectAndLoadCommands(repoPath: string, codebaseId: string): Promise<void> {
-    const commandFolders = ['.claude/commands', '.agents/commands'];
+    const commandFolders = ['.claude/commands', '.gemini/commands', '.agents/commands'];
 
     for (const folder of commandFolders) {
       try {
@@ -293,13 +293,35 @@ export class GitHubAdapter implements IPlatformAdapter {
   }
 
   /**
+   * Detect preferred assistant based on repo folders
+   */
+  private async detectAssistantPreference(repoPath: string): Promise<string | null> {
+    const markers: { folder: string; assistant: string }[] = [
+      { folder: '.gemini', assistant: 'gemini' },
+      { folder: '.codex', assistant: 'codex' },
+      { folder: '.claude', assistant: 'claude' },
+    ];
+
+    for (const marker of markers) {
+      try {
+        await access(join(repoPath, marker.folder));
+        return marker.assistant;
+      } catch {
+        continue;
+      }
+    }
+
+    return null;
+  }
+
+  /**
    * Get or create codebase for repository
    * Returns: codebase record, path to use, and whether it's new
    */
   private async getOrCreateCodebaseForRepo(
     owner: string,
     repo: string
-  ): Promise<{ codebase: { id: string; name: string }; repoPath: string; isNew: boolean }> {
+  ): Promise<{ codebase: Codebase; repoPath: string; isNew: boolean }> {
     // Try both with and without .git suffix to match existing clones
     const repoUrlNoGit = `https://github.com/${owner}/${repo}`;
     const repoUrlWithGit = `${repoUrlNoGit}.git`;
@@ -416,6 +438,13 @@ ${userComment}`;
 
     // 8. Ensure repo ready (clone if needed, sync if new conversation)
     await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewConversation);
+
+    const detectedAssistant = await this.detectAssistantPreference(repoPath);
+    if (detectedAssistant && codebase.ai_assistant_type !== detectedAssistant) {
+      await codebaseDb.updateAssistantType(codebase.id, detectedAssistant);
+      codebase.ai_assistant_type = detectedAssistant;
+      console.log(`[GitHub] Using ${detectedAssistant} assistant based on repo markers`);
+    }
 
     // 9. Auto-load commands if new codebase
     if (isNewCodebase) {

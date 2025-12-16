@@ -7,6 +7,7 @@
 import { IAssistantClient } from '../types';
 import { ClaudeClient } from './claude';
 import { CodexClient } from './codex';
+import { GeminiClient } from './gemini';
 
 /**
  * Get the appropriate AI assistant client based on type
@@ -21,7 +22,9 @@ export function getAssistantClient(type: string): IAssistantClient {
       return new ClaudeClient();
     case 'codex':
       return new CodexClient();
+    case 'gemini':
+      return new GeminiClient();
     default:
-      throw new Error(`Unknown assistant type: ${type}. Supported types: 'claude', 'codex'`);
+      throw new Error(`Unknown assistant type: ${type}. Supported types: 'claude', 'codex', 'gemini'`);
   }
 }

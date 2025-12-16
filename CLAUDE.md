@@ -10,6 +10,8 @@
 
 **Remote Agentic Coding Platform**: Control AI coding assistants (Claude Code SDK, Codex SDK) remotely from Slack, Telegram, and GitHub. Built with **Node.js + TypeScript + PostgreSQL**, single-developer tool for practitioners of the Dynamous Agentic Coding Course. Architecture prioritizes simplicity, flexibility, and user control.
 
+> ✅ **New**: Gemini assistants are now supported. Follow [docs/assistants/gemini.md](docs/assistants/gemini.md) for credential setup, validation, and code-execution notes.
+
 ## Core Principles
 
 **Single-Developer Tool**

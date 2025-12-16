@@ -212,21 +212,28 @@ Session:
 
         // Auto-detect assistant type based on folder structure
         let suggestedAssistant = 'claude';
+        const geminiFolder = join(targetPath, '.gemini');
         const codexFolder = join(targetPath, '.codex');
         const claudeFolder = join(targetPath, '.claude');
 
         try {
-          await access(codexFolder);
-          suggestedAssistant = 'codex';
-          console.log('[Clone] Detected .codex folder - using Codex assistant');
+          await access(geminiFolder);
+          suggestedAssistant = 'gemini';
+          console.log('[Clone] Detected .gemini folder - using Gemini assistant');
         } catch {
           try {
-            await access(claudeFolder);
-            suggestedAssistant = 'claude';
-            console.log('[Clone] Detected .claude folder - using Claude assistant');
+            await access(codexFolder);
+            suggestedAssistant = 'codex';
+            console.log('[Clone] Detected .codex folder - using Codex assistant');
           } catch {
-            // Default to claude
-            console.log('[Clone] No assistant folder detected - defaulting to Claude');
+            try {
+              await access(claudeFolder);
+              suggestedAssistant = 'claude';
+              console.log('[Clone] Detected .claude folder - using Claude assistant');
+            } catch {
+              // Default to claude
+              console.log('[Clone] No assistant folder detected - defaulting to Claude');
+            }
           }
         }
 
@@ -251,7 +258,7 @@ Session:
 
         // Detect command folders
         let commandFolder: string | null = null;
-        for (const folder of ['.claude/commands', '.agents/commands']) {
+        for (const folder of ['.claude/commands', '.gemini/commands', '.agents/commands']) {
           try {
             await access(join(targetPath, folder));
             commandFolder = folder;
@@ -265,6 +272,9 @@ Session:
 
         if (commandFolder) {
           responseMessage += `\n\n📁 Found: ${commandFolder}/\nUse /load-commands ${commandFolder} to register commands.`;
+        } else {
+          responseMessage +=
+            '\n\nNo default command folder found (.claude/commands, .gemini/commands, .agents/commands). Use /load-commands <folder> after creating commands.';
         }
 
         return {

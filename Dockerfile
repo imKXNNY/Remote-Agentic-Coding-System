@@ -1,7 +1,10 @@
 FROM node:20-slim
 
-# Prevent interactive prompts during installation
+ARG GEMINI_CLI_VERSION=0.21.0
+
+# Prevent interactive prompts during installation and ensure npm global binaries stay on PATH
 ENV DEBIAN_FRONTEND=noninteractive
+ENV PATH="/usr/local/bin:${PATH}"
 
 WORKDIR /app
 
@@ -35,6 +38,10 @@ COPY package*.json ./
 # Install ALL dependencies (including devDependencies for build)
 RUN npm ci
 
+# Install Gemini CLI globally so docker images always include the binary
+RUN npm install -g @google/gemini-cli@${GEMINI_CLI_VERSION} \
+    && npm cache clean --force
+
 # Copy application code
 COPY . .
 
@@ -44,14 +51,16 @@ RUN npm run build
 # Remove devDependencies to reduce image size
 RUN npm prune --production
 
-# Fix permissions for appuser
-RUN chown -R appuser:appuser /app
+# Fix permissions for appuser and provision shared auth directories
+RUN chown -R appuser:appuser /app \
+    && mkdir -p /home/appuser/.gemini \
+    && chown -R appuser:appuser /home/appuser/.gemini
 
 # Switch to non-root user
 USER appuser
 
-# Create .codex directory for Codex authentication
-RUN mkdir -p /home/appuser/.codex
+# Create auth directories for Codex and Gemini (Gemini used via CLI)
+RUN mkdir -p /home/appuser/.codex /home/appuser/.gemini
 
 # Configure git to trust /workspace directory
 # This prevents "fatal: detected dubious ownership" errors when git operations

@@ -61,3 +61,10 @@ export async function findCodebaseByRepoUrl(repoUrl: string): Promise<Codebase |
   );
   return result.rows[0] || null;
 }
+
+export async function updateAssistantType(id: string, assistantType: string): Promise<void> {
+  await pool.query(
+    'UPDATE remote_agent_codebases SET ai_assistant_type = $1, updated_at = NOW() WHERE id = $2',
+    [assistantType, id]
+  );
+}
