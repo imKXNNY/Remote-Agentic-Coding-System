@@ -6,7 +6,7 @@ Pay special attention to naming of existing utils types and models. Import from 
 
 ## Feature Description
 
-Add first-class support for Google's Gemini coding assistant so conversations can run through Gemini's streaming API with code-execution capability, same workflows (prime → plan → execute) as existing Claude/Codex clients. Implementation must include a new `GeminiClient`, environment validation, auto-detection of `.gemini/commands` folders during `/clone` and GitHub webhook flows, plus documentation describing credential setup and limitations.
+Add first-class support for Google's Gemini coding assistant so conversations can run through the local Gemini CLI (stream-json output with code-execution tools) using the same workflows (prime → plan → execute) as existing Claude/Codex clients. Implementation must include a new `GeminiClient`, environment validation for the CLI binary/auth, auto-detection of `.gemini/commands` folders during `/clone` and GitHub webhook flows, plus documentation describing credential setup and limitations.
 
 ## User Story
 
@@ -20,14 +20,14 @@ Current system only instantiates Claude or Codex clients via `getAssistantClient
 
 ## Solution Statement
 
-Introduce a new TypeScript client wrapping `@google/generative-ai` streaming APIs with history serialization stored in `assistant_session_id`, extend detection logic to recognize `.gemini/commands`, update startup validation and docs for new env vars (`GEMINI_API_KEY`, `GEMINI_MODEL`), and add tests/validation instructions to ensure the new assistant behaves consistently with existing abstractions.
+Introduce a new TypeScript client that shells out to the Gemini CLI (YOLO mode, `--output-format stream-json`) and translates CLI events into our `MessageChunk` format, including a resilient prompt hand-off that tolerates YAML front-matter and other `--`-prefixed text. Extend detection logic to recognize `.gemini/commands`, update startup validation and docs for CLI env vars (`GEMINI_CLI_PATH`, `GEMINI_CLI_ARGS`, auth notes), and add tests/validation instructions to ensure the new assistant behaves consistently with existing abstractions.
 
 ## Feature Metadata
 
 **Feature Type**: New Capability  
 **Estimated Complexity**: Medium  
 **Primary Systems Affected**: `src/clients`, orchestrator session persistence, command handler (/clone), GitHub adapter auto-detection, docs/env templates  
-**Dependencies**: `@google/generative-ai` npm package, user-provided `GEMINI_API_KEY`
+**Dependencies**: Gemini CLI binary/auth (installed in Docker image), optional env overrides (`GEMINI_CLI_PATH`, `GEMINI_CLI_ARGS`)
 
 ---
 
@@ -47,18 +47,16 @@ Introduce a new TypeScript client wrapping `@google/generative-ai` streaming API
 
 ### New Files to Create
 
-- `src/clients/gemini.ts` – Implements `IAssistantClient` using `@google/generative-ai` streaming API with code-execution tool support.  
-- `src/clients/gemini.test.ts` – Unit tests for history serialization/deserialization helpers (mock SDK).  
-- `docs/assistants/gemini.md` – Focused setup instructions, troubleshooting, rate-limit notes.
+- `src/clients/gemini.ts` – Implements `IAssistantClient` by spawning the Gemini CLI, parsing stream-json lines, and persisting CLI session IDs.  
+- `src/clients/gemini.test.ts` – Unit tests for prompt/arg piping helpers (mock spawn + event parsing).  
+- `docs/assistants/gemini.md` – Focused setup instructions for the CLI, auth persistence, troubleshooting, rate-limit notes.
 
 ### Relevant Documentation YOU SHOULD READ THESE BEFORE IMPLEMENTING!
 
-- [Google Generative AI Samples README](https://github.com/google-gemini/deprecated-generative-ai-js/blob/main/samples/README.md)  
-  - Requirements (Node.js ≥18, `API_KEY` env var). Why: ensures runtime compatibility + environment instructions.  
-- [Chat Streaming Sample](https://github.com/google-gemini/deprecated-generative-ai-js/blob/main/samples/chat.js)  
-  - Demonstrates `startChat` and `sendMessageStream`. Why: guides streaming implementation + chunk iteration.  
-- [Code Execution Sample](https://github.com/google-gemini/deprecated-generative-ai-js/blob/main/samples/code_execution.js)  
-  - Shows enabling `tools: [{ codeExecution: {} }]`. Why: necessary to let Gemini run shell/code similar to other assistants.  
+- [Gemini CLI README](https://github.com/google-gemini/gemini-cli)  
+  - Requirements (Node.js ≥20, auth via `gemini login`, YOLO/approval flags, mounting `~/.gemini`). Why: ensures runtime compatibility + environment instructions.  
+- [Gemini CLI stream-json output schema](https://github.com/google-gemini/gemini-cli#stream-json-output)  
+  - Demonstrates event structure (`init`, `message`, `tool_use`, `tool_result`, `error`, `result`). Why: guides streaming implementation + chunk iteration.  
 - `.agents/reference/adding-ai-assistant-clients.md`  
   - Internal guidelines for `IAssistantClient` implementations, session persistence expectations, and error handling patterns.
 
@@ -76,28 +74,27 @@ Introduce a new TypeScript client wrapping `@google/generative-ai` streaming API
 
 ### Phase 1: Foundation
 
-Prepare dependencies, configuration, and documentation placeholders for Gemini support.
+Prepare CLI dependencies, configuration, and documentation placeholders for Gemini support.
 
 **Tasks:**
 
-- Add `@google/generative-ai` dependency and ensure TypeScript configuration handles its types.  
-- Introduce new environment variables (`GEMINI_API_KEY`, optional `GEMINI_MODEL`, `GEMINI_CODE_EXECUTION=true|false`) in `.env.example` with descriptive comments.  
-- Draft `docs/assistants/gemini.md` covering API key retrieval, verifying `node chat.js`, and warning about quota/latency.  
-- Update README AI assistant setup section with Gemini prerequisites and quickstart steps.
+- Ensure Docker image installs `@google/gemini-cli` (already done) and surface optional `GEMINI_CLI_PATH`/`GEMINI_CLI_ARGS` env vars in `.env.example`.  
+- Draft `docs/assistants/gemini.md` covering CLI install/login, mounting `/home/appuser/.gemini`, YOLO/code-execution options, and smoke tests.  
+- Update README AI assistant setup section with Gemini CLI prerequisites and quickstart steps.  
+- Confirm CLAUDE.md references Gemini CLI as a supported assistant.
 
 ### Phase 2: Core Implementation
 
-Build Gemini client with history persistence and streaming integration.
+Build Gemini client with CLI process management and streaming integration.
 
 **Tasks:**
 
 - Implement `src/clients/gemini.ts` that:  
-  - Imports `GoogleGenerativeAI`, validates env vars in constructor.  
-  - Encodes chat history (array of Gemini `Content` objects) into JSON stored in `assistant_session_id`.  
-  - Enables code execution via `tools: [{ codeExecution: {} }]` when creating the model.  
-  - Handles `sendMessageStream`, yielding `MessageChunk`s for assistant text and logging tool events (Gemini surfaces `functionCall`/`codeExecution` via structured responses).  
-  - Gracefully handles API errors (yield `system` warning for recoverable quota errors, throw otherwise).  
-- Add helper tests (`src/clients/gemini.test.ts`) verifying serialization/truncation logic without hitting the API (mock the SDK module).
+  - Validates CLI availability and fails fast with actionable error messages.  
+  - Pipes prompts via stdin (protecting against YAML front-matter) while appending `--output-format stream-json --yolo` arguments and custom `GEMINI_CLI_ARGS`.  
+  - Parses stdout line-by-line, mapping CLI events (`message`, `tool_use`, `tool_result`, `error`, `result`) into `MessageChunk`s, and captures CLI session IDs for persistence.  
+  - Emits helpful `[Gemini CLI]` stderr logs and throws when the CLI exits non-zero (surface exit code + snippet).  
+- Add helper tests (`src/clients/gemini.test.ts`) verifying stdin piping, event parsing, and error propagation (mock spawn/readline).
 
 ### Phase 3: Integration
 
@@ -108,7 +105,7 @@ Wire Gemini into the broader platform.
 - Update `src/clients/factory.ts` to include `case 'gemini': return new GeminiClient();` and clarify error message listing supported assistants.  
 - Extend `/clone` detection in `src/handlers/command-handler.ts` to look for `.gemini` markers and include `.gemini/commands` suggestions in the success message.  
 - Modify `src/adapters/github.ts` auto-detection to register `.gemini/commands` and set default assistant to Gemini when `.gemini` folder exists.  
-- Enhance startup validation in `src/index.ts` to warn when Gemini env vars missing but assistant selected by default; ensure app exits if `DEFAULT_AI_ASSISTANT=gemini` while credentials absent.
+- Enhance startup validation in `src/index.ts` to warn when Gemini CLI binary/auth missing but assistant selected by default; ensure app exits if `DEFAULT_AI_ASSISTANT=gemini` while CLI unavailable or if DB contains Gemini codebases.
 
 ### Phase 4: Testing & Validation
 
@@ -117,13 +114,13 @@ Verify correctness through automated and manual tests.
 **Tasks:**
 
 - Extend Jest suite to cover:  
-  - Gemini client history helpers.  
+  - Gemini client stdin piping / stream-json parsing.  
   - `/clone` detection for `.gemini/commands`.  
   - GitHub adapter command auto-loading updated list.  
 - Document manual validation steps:  
-  - Set `GEMINI_API_KEY`, run `/clone` on repo containing `.gemini/commands`, invoke `/command-invoke plan`, confirm streaming.  
+  - Run `gemini login` inside container or host, `/clone` repo containing `.gemini/commands`, invoke `/command-invoke plan`, confirm streaming + tool logs (especially with prompts starting `---`).  
   - Trigger GitHub webhook payload referencing such repo and verify logs show Gemini assistant selection.  
-- Run full `npm run type-check`, `npm run lint`, `npm run test`, and smoke test `node` script verifying `@google/generative-ai` import.
+- Run full `npm run type-check`, `npm run lint`, `npm run test`, and CLI smoke test `gemini --output-format stream-json --prompt "Gemini CLI smoke test" | head`.
 
 ---
 
@@ -133,43 +130,46 @@ IMPORTANT: Execute every task in order, top to bottom. Each task is atomic and i
 
 ### CREATE docs/assistants/gemini.md
 
-- **IMPLEMENT**: Describe prerequisites (Node 18+, `npm install @google/generative-ai` already handled), how to obtain `GEMINI_API_KEY`, enabling code execution, validating via sample script.  
+- **IMPLEMENT**: Describe prerequisites (Node 20+, install/login to `@google/gemini-cli`, mounting `~/.gemini` if running in containers), how to configure `GEMINI_CLI_PATH`/`GEMINI_CLI_ARGS`, enabling YOLO/code execution, and validating via `gemini --output-format stream-json --prompt "Gemini CLI smoke test" | head`.  
 - **PATTERN**: Mirror depth of other assistant docs (e.g., CLAUDE.md sections).  
 - **GOTCHA**: Call out quota/latency differences vs Claude/Codex.  
 - **VALIDATE**: `cat docs/assistants/gemini.md`
 
 ### UPDATE README.md
 
-- **IMPLEMENT**: Add Gemini subsection under AI Assistant setup, including env var table, installation steps, and quick validation command (`node samples/chat.js`).  
+- **IMPLEMENT**: Add Gemini subsection under AI Assistant setup, including env var table (CLI path/args, auth dir), installation steps (`npm install -g @google/gemini-cli`, `gemini login`), and a quick validation command using `gemini --output-format stream-json --prompt "..."`. Mention Docker volume mount for `/home/appuser/.gemini`.  
 - **IMPORTS**: None (markdown).  
-- **GOTCHA**: Keep table formatting consistent; mention security of API key.  
+- **GOTCHA**: Keep table formatting consistent; remind readers to protect CLI auth tokens (mounted `.gemini` directory).  
 - **VALIDATE**: `npm run lint` (ensures markdown-linked references ok via ESLint markdown plugin)
 
 ### UPDATE .env.example
 
-- **IMPLEMENT**: Add `GEMINI_API_KEY`, `GEMINI_MODEL=gemini-1.5-flash`, `GEMINI_ENABLE_CODE_EXECUTION=true` with clear comments grouped under AI assistants.  
+- **IMPLEMENT**: Add `GEMINI_CLI_PATH` (optional), `GEMINI_CLI_ARGS` (optional comma-separated flags), and guidance for `DEFAULT_AI_ASSISTANT=gemini`. Remove obsolete API-key-only placeholders since CLI manages auth.  
 - **VALIDATE**: `git diff .env.example` (manual review)
 
 ### UPDATE package.json
 
-- **IMPLEMENT**: Add `@google/generative-ai` to dependencies; keep alphabetical order.  
+- **IMPLEMENT**: Ensure no unused Gemini API dependencies linger (we rely on the CLI binary). If `@google/generative-ai` was added previously, remove it. Update scripts/docs references if they point to API samples.  
 - **VALIDATE**: `npm install && npm run lint`
 
 ### CREATE src/clients/gemini.ts
 
 - **IMPLEMENT**:  
-  - Validate env vars in constructor; throw descriptive error if missing.  
-  - Provide helper to parse/serialize chat history (JSON string stored in session).  
-  - Use `GoogleGenerativeAI` to `startChat({ history, tools: codeExecution? })`, call `sendMessageStream(prompt)`.  
-  - `for await` each chunk: emit `assistant` chunk for `chunk.text()`, log/emit `tool` chunk when `chunk.candidates?.[0]?.content?.parts` contain `codeExecution` output, and after stream completion yield `result` chunk containing new serialized history.  
-  - Catch API errors, log `[Gemini]` prefix, rethrow for orchestrator to handle.  
-- **IMPORTS**: `GoogleGenerativeAI`, local `IAssistantClient`, `MessageChunk`.  
-- **GOTCHA**: Limit stored history (e.g., last 10 exchanges) to keep session string manageable.  
+  - Validate CLI availability (`spawnSync(binary, ['--version'])`) in constructor; throw descriptive error if missing (especially when `DEFAULT_AI_ASSISTANT=gemini`).  
+  - Build CLI args array: always include `--output-format`, `--yolo` (or `--approval-mode=yolo`), append `GEMINI_CLI_ARGS`.  
+  - Pipe prompt text through stdin (or `--prompt=-`) to avoid misinterpreting YAML `---`/`--flag` sequences; cover plan file front-matter case seen in logs.  
+  - Spawn CLI with proper `cwd`, capture stdout as line-delimited JSON, and map each event to `MessageChunk` (`assistant`, `tool`, `system`, `result`).  
+  - Watch stderr for warnings and surface them as `[Gemini CLI]` logs; on non-zero exit code include stderr snippet in thrown Error so orchestrator can notify the user.  
+- **IMPORTS**: `child_process.spawn`, `readline`, `IAssistantClient`, `MessageChunk`.  
+- **GOTCHA**: Some CLI events (e.g., `tool_result`) arrive after `result`; buffer sessionId from `init` event. Ensure process cleanup in error paths.  
 - **VALIDATE**: `npm run type-check`
 
 ### CREATE src/clients/gemini.test.ts
 
-- **IMPLEMENT**: Jest tests mocking serialization helpers, ensuring truncated history and error cases handled. Use jest.mock to stub `@google/generative-ai`.  
+- **IMPLEMENT**: Jest tests mocking `child_process.spawn` to simulate stream-json events. Cover cases:  
+  - Prompt text starting with `---` still reaches stdin (no CLI parse failure).  
+  - CLI emitting `tool_use` / `tool_result` events becomes `tool` chunks.  
+  - Non-zero exit rejects with stderr snippet.  
 - **VALIDATE**: `npm run test -- src/clients/gemini.test.ts`
 
 ### UPDATE src/clients/factory.ts
@@ -195,7 +195,7 @@ IMPORTANT: Execute every task in order, top to bottom. Each task is atomic and i
 
 ### UPDATE src/index.ts
 
-- **IMPLEMENT**: Enhance credential validation to check if Gemini env vars exist; warn when missing but `DEFAULT_AI_ASSISTANT=gemini` or a codebase uses it. Document log messages similar to existing ones.  
+- **IMPLEMENT**: Enhance credential validation to check if the Gemini CLI binary is runnable. Warn when missing, but **fail fast** if `DEFAULT_AI_ASSISTANT=gemini` or if DB contains Gemini codebases (similar to Codex/Claude checks). Log clear remediation steps (install CLI, set `GEMINI_CLI_PATH`).  
 - **VALIDATE**: `npm run type-check`
 
 ### UPDATE CLAUDE.md (optional but recommended)
@@ -209,20 +209,20 @@ IMPORTANT: Execute every task in order, top to bottom. Each task is atomic and i
 
 ### Unit Tests
 
-- `src/clients/gemini.test.ts`: serialization/resume logic, ensures truncated history and session strings.  
+- `src/clients/gemini.test.ts`: mock spawn/readline to ensure stdin piping of prompts, stream-json parsing, tool/result chunk emission, and error propagation.  
 - Extend `src/handlers/command-handler.test.ts` to cover `.gemini/commands` detection message.  
 - Add lightweight test for factory default error when `gemini` unsupported env.
 
 ### Integration Tests
 
-- Manual-only due to external API: run `/command-invoke plan` against Gemini-configured repo with `GEMINI_API_KEY` set, confirm streaming and tool-invocation logs.  
+- Manual-only due to external tooling: run `/command-invoke plan` against a Gemini-configured repo after `gemini login`, confirm streaming/tool logs and that prompts starting with `---` no longer crash the CLI.  
 - GitHub webhook dry-run: use existing webhook simulator to trigger `.gemini/commands` repo and verify logs showing command load + assistant selection.
 
 ### Edge Cases
 
-- Missing/invalid API key -> ensure constructor throws and startup logs warn; orchestrator should surface friendly error.  
-- Oversized chat history -> verify truncation to avoid DB bloat.  
-- Gemini API quota errors mid-stream -> ensure client yields `system` warning chunk then throws.
+- Missing CLI binary -> ensure startup warns and blocks Gemini-only conversations.  
+- Prompt text beginning with YAML front matter or `--` flags -> ensure stdin piping prevents CLI parse errors (regression test).  
+- CLI quota/permission errors mid-stream -> ensure client yields `system` warning chunk then throws.
 
 ---
 
@@ -247,10 +247,10 @@ npm run test
 ### Level 3: Integration Tests
 
 ```bash
-# Requires GEMINI_API_KEY set
+# Requires gemini CLI installed + gemini login run inside container/host
 curl -X POST http://localhost:3000/test/message \
   -H 'Content-Type: application/json' \
-  -d '{"conversationId":"gemini-smoke","message":"/command-invoke plan \"Test Gemini\""}'
+  -d '{"conversationId":"gemini-smoke","message":"/command-invoke plan \"---\nSmoke test\""}'
 ```
 
 ### Level 4: Manual Validation
@@ -263,13 +263,13 @@ curl -X POST http://localhost:3000/test/message \
 
 ## ACCEPTANCE CRITERIA
 
-- [ ] `GeminiClient` streams assistant/tool/result chunks and persists history.  
+- [ ] `GeminiClient` streams assistant/tool/result chunks from the CLI, safely handles stdin prompts, and persists session IDs.  
 - [ ] `/clone` + GitHub workflows detect `.gemini/commands` and set assistant type accordingly.  
 - [ ] README, CLAUDE.md, and docs explain Gemini setup + env vars.  
 - [ ] `.env.example` lists new variables with guidance.  
 - [ ] Factory + orchestrator handle Gemini without regressions.  
 - [ ] Validation commands pass, including unit tests.  
-- [ ] Manual smoke test with real Gemini API key succeeds.
+- [ ] Manual smoke test after `gemini login` succeeds.
 
 ---
 
@@ -286,7 +286,7 @@ curl -X POST http://localhost:3000/test/message \
 
 ## NOTES
 
-- Gemini chat history stored in `assistant_session_id` must be bounded (e.g., store last 10 turns) to avoid oversized DB rows.  
-- Code execution tool may incur latency; include warning in docs.  
-- If API key unavailable in certain environments, ensure logs clearly indicate Gemini disabled so ops can troubleshoot quickly.  
+- Gemini CLI sessions output UUIDs in `init` events—store those in `assistant_session_id`; keep metadata small.  
+- Code execution via CLI may incur latency; include warning in docs.  
+- If CLI binary/auth unavailable in certain environments, ensure logs clearly indicate Gemini disabled so ops can troubleshoot quickly (especially if repo defaults to Gemini).  
 - Consider future follow-up plan for Qwen once Gemini integration patterns validated.

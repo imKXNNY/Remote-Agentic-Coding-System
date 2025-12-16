@@ -92,7 +92,7 @@ export class GeminiClient implements IAssistantClient {
       console.log('[Gemini CLI] Starting new session');
     }
 
-    args.push('--prompt', prompt);
+    args.push(`--prompt=${prompt}`);
 
     let resolvedSessionId = resumeSessionId;
     let sawResult = false;

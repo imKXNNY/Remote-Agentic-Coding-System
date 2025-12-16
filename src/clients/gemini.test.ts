@@ -66,8 +66,8 @@ describe('GeminiClient (CLI)', () => {
     const spawnArgs = spawnMock.mock.calls[0][1];
     expect(spawnArgs).toContain('--output-format');
     expect(spawnArgs).toContain('stream-json');
-    expect(spawnArgs).toContain('--prompt');
-    expect(spawnArgs).toContain('hello');
+    const promptArg = (spawnArgs as string[]).find(arg => arg.startsWith('--prompt='));
+    expect(promptArg).toBe(`--prompt=hello`);
   });
 
   test('propagates CLI failures', async () => {
