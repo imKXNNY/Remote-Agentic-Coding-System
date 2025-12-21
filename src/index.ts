@@ -243,7 +243,10 @@ async function main(): Promise<void> {
 
 function isGeminiCliAvailable(binary: string): boolean {
   try {
-    const result = spawnSync(binary, ['--version'], { stdio: 'ignore' });
+    const result = spawnSync(binary, ['--version'], {
+      stdio: 'ignore',
+      shell: process.platform === 'win32'
+    });
     return result.status === 0;
   } catch {
     return false;
