@@ -213,6 +213,7 @@ gemini login                        # OAuth flow, stores tokens under ~/.gemini/
 |----------|-------------|---------|
 | `GEMINI_CLI_PATH` | Override the binary path (defaults to `gemini` on `$PATH`). | `/usr/local/bin/gemini` |
 | `GEMINI_CLI_ARGS` | Extra CLI flags appended on every run (comma-separated). | `--yolo,--model=gemini-2.5-flash` |
+| `GEMINI_CREDS_PATH` | Host path containing your CLI auth files (`google_accounts.json`, `oauth_creds.json`, `settings.json`, `state.json`). Mounted into Docker so you don’t need to log in every restart. | `/home/me/.gemini` or `C:\Users\me\.gemini` |
 
 The CLI manages authentication, quotas, and tool approvals itself. The Remote Coding Agent simply spawns it with `--output-format stream-json` and streams the resulting JSON events back to Telegram/GitHub.
 
@@ -226,10 +227,17 @@ The CLI manages authentication, quotas, and tool approvals itself. The Remote Co
     app:
       volumes:
         - ${WORKSPACE_PATH:-./workspace}:/workspace
-        - ./gemini:/home/appuser/.gemini   # persists CLI login data
+        - ${GEMINI_CREDS_PATH:-./.gemini}:/home/appuser/.gemini   # persists CLI login data
   ```
 
-  Replace `./gemini` with an absolute path if preferred. See [docs/assistants/gemini.md](docs/assistants/gemini.md#docker-deployments) for additional options such as overriding `GEMINI_CLI_PATH`.
+  Set `GEMINI_CREDS_PATH` in `.env` to the absolute directory that already contains `~/.gemini` files from a successful `gemini login` run (for example `/home/me/.gemini` or `C:\Users\me\.gemini`). Copy over `google_accounts.json`, `oauth_creds.json`, `settings.json`, and `state.json` if needed. See [docs/assistants/gemini.md](docs/assistants/gemini.md#docker-deployments) for additional options such as overriding `GEMINI_CLI_PATH`.
+
+**Current Status & Next Steps**
+
+- ✅ Windows + Linux parity: `GEMINI_CLI_PATH` accepts platform-specific binaries (including `C:\Users\<you>\AppData\Roaming\npm\gemini.cmd`), the Docker image ships with `@google/gemini-cli`, and `docker-compose.gemini.yml` exposes alternate host ports plus the `${GEMINI_CREDS_PATH}` volume so cached tokens persist.
+- ✅ Runtime validation: the server now fails fast when `DEFAULT_AI_ASSISTANT=gemini` but the CLI is missing, resume IDs are retried once before starting a fresh session, and the Docker workflow documents how to exec into the container to run `gemini --version`/`gemini models list`.
+- ⏭️ Before opening a PR, we still need to: (1) bake the `tree` utility into the Docker image so `.gemini/commands/prime.md` can display directory structures, (2) publish a rebuilt image that includes the positional-prompt change to silence the CLI’s `--prompt` deprecation warning, (3) add nicer buffering for Gemini’s streaming chunks, and (4) expand automated tests around the Gemini client similar to the Claude/Codex suites.
+- ➡️ To test end-to-end, run `docker compose -p gemini-test -f docker-compose.gemini.yml up --build`, then exec into the `app-with-db` container to run `gemini --output-format stream-json --prompt "smoke test"` or `gemini models list` before interacting via Telegram/GitHub.
 
 **Validate the CLI:**
 

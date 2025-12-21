@@ -4,6 +4,7 @@ Here’s a checklist you can follow for a full end-to-end Gemini CLI verificatio
 - Install the CLI locally with `npm install -g @google/gemini-cli` (or Homebrew).
 - Run `gemini login` once and confirm `~/.gemini/` contains tokens/settings.
 - In `.env`, set `DEFAULT_AI_ASSISTANT=gemini` if you want new conversations to pick Gemini automatically. Optionally set `GEMINI_CLI_PATH` if the binary isn’t on `$PATH`, or `GEMINI_CLI_ARGS` for default flags (e.g., `--model=gemini-2.5-flash`).
+- Set `GEMINI_CREDS_PATH` to the absolute directory holding your CLI auth files (`~/.gemini` on Linux/macOS or `C:\Users\<you>\.gemini` on Windows). Docker compose will bind-mount this path into `/home/appuser/.gemini` so restarts keep your login state.
 - Restart the Remote Coding Agent (`npm run dev`) so it loads the new config.
 
 **Environment Prep (Docker)**

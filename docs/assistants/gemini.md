@@ -23,6 +23,7 @@ binary lives so the orchestrator can spawn it:
 |----------|---------|---------|
 | `GEMINI_CLI_PATH` | Absolute path to the `gemini` binary (falls back to `$PATH`). | `/usr/local/bin/gemini` |
 | `GEMINI_CLI_ARGS` | Extra default flags (comma-separated) to append when the agent runs the CLI. | `--model=gemini-2.5-flash,--debug` |
+| `GEMINI_CREDS_PATH` | Host directory containing Gemini CLI auth artifacts (`google_accounts.json`, `oauth_creds.json`, `settings.json`, `state.json`). Automatically mounted into Docker containers for persistent auth. | `/home/me/.gemini`, `C:\Users\me\.gemini` |
 
 All authentication still happens inside the CLI (e.g., `gemini login`). Any CLI
 settings under `.gemini/` are respected automatically because we launch the CLI
@@ -65,17 +66,17 @@ dependencies.
   docker compose exec app gemini login
   ```
 
-- Persist the CLI’s `~/.gemini` directory by mounting a host path or volume:
+- Persist the CLI’s `~/.gemini` directory by mounting a host path or volume (via `GEMINI_CREDS_PATH`):
 
   ```yaml
   services:
     app:
       volumes:
         - ${WORKSPACE_PATH:-./workspace}:/workspace
-        - ./gemini:/home/appuser/.gemini
+        - ${GEMINI_CREDS_PATH:-./.gemini}:/home/appuser/.gemini
   ```
 
-  Replace `./gemini` with an absolute host path or Docker named volume. If you prefer supplying a custom binary (instead of the baked one), mount it and point `GEMINI_CLI_PATH` to the mounted location—see the environment variable table above.
+  Set `GEMINI_CREDS_PATH` in `.env` to the absolute location of your existing Gemini CLI credentials folder. For example: `/home/me/.gemini` (Linux/macOS) or `C:\Users\me\.gemini` (Windows, use forward slashes in `.env`). Ensure the directory contains the files produced by `gemini login`: `google_accounts.json`, `oauth_creds.json`, `settings.json`, and `state.json`. This avoids re-running OAuth every time the container restarts. If you prefer supplying a custom binary (instead of the baked one), mount it and point `GEMINI_CLI_PATH` to the mounted location—see the environment variable table above.
 
 - When `DEFAULT_AI_ASSISTANT=gemini`, the server now fails fast if the CLI cannot be executed. Run `docker compose exec app gemini --version` anytime you update the image to confirm the binary remains reachable.
 
