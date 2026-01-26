@@ -1,4 +1,4 @@
-# Root Cause Analysis: GitHub Issue #1
+# Root Cause Analysis: GitHub Issue [#1](https://github.com/imKXNNY/remote-agentic-coding-system/issues/1)
 
 ## Summary
 When switching to an already existing workspace using the `/setcwd` command, the system updates the working directory (CWD) but fails to switch the connected codebase/repository context. This results in the AI assistant being stuck in the context of the previous repository despite being in the folder of a different one.
