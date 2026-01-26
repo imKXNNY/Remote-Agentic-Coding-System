@@ -1,7 +1,7 @@
 {
   "name": "remote-coding-agent",
   "version": "1.0.0",
-  "description": "Remote agentic coding platform - Control AI coding assistants from Telegram, Slack, and GitHub",
+  "description": "Webton Remote Agentic Coding System - Control AI coding assistants from Telegram, Slack, and GitHub",
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
@@ -25,7 +25,7 @@
     "claude",
     "codex"
   ],
-  "author": "",
+  "author": "Kenny R. Güçü (Webton e.U.)",
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.30",

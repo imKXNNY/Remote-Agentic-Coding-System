@@ -1,4 +1,4 @@
-# Dynamous Remote Coding Agent
+# Webton Remote Agentic Coding System
 
 Control AI coding assistants (Claude Code, Codex) remotely from Telegram, GitHub, and more. Built for developers who want to code from anywhere with persistent sessions and flexible workflows/systems.
 
@@ -35,7 +35,7 @@ Control AI coding assistants (Claude Code, Codex) remotely from Telegram, GitHub
 
 **Get started:**
 ```bash
-git clone https://github.com/coleam00/remote-agentic-coding-system
+git clone https://github.com/imKXNNY/remote-agentic-coding-system
 cd remote-agentic-coding-system
 ```
 
