@@ -61,3 +61,13 @@ export async function findCodebaseByRepoUrl(repoUrl: string): Promise<Codebase |
   );
   return result.rows[0] || null;
 }
+export async function findBestCodebaseForPath(path: string): Promise<Codebase | null> {
+  // Find codebases whose default_cwd is a prefix of the given path.
+  // We check for an exact match or a match followed by a path separator.
+  // Order by length descending to get the most specific match (deepest directory)
+  const result = await pool.query<Codebase>(
+    'SELECT * FROM remote_agent_codebases WHERE $1 = default_cwd OR $1 LIKE default_cwd || \'/%\' ORDER BY LENGTH(default_cwd) DESC LIMIT 1',
+    [path]
+  );
+  return result.rows[0] || null;
+}
