@@ -225,6 +225,11 @@ async function main(): Promise<void> {
   const uploadRouter = require('./routes/upload').default;
   app.use('/api', authMiddleware, uploadRouter);
 
+  // Register GitHub Route
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const githubRouter = require('./routes/github').default;
+  app.use('/api', authMiddleware, githubRouter);
+
   // API Routes (Protected)
   app.get('/api/conversations', authMiddleware, async (_req, res) => {
     try {
@@ -411,8 +416,27 @@ async function main(): Promise<void> {
      }
      
      console.log('[WebSocket] Authentication successful for user:', login);
+     
+     // Setup Heartbeat
+     (ws as any).isAlive = true;
+     ws.on('pong', () => { (ws as any).isAlive = true; });
+
      // Delegate to adapter
      webui.handleConnection(ws, req);
+  });
+
+  // WebSocket Heartbeat
+  const interval = setInterval(() => {
+    wss.clients.forEach((ws: any) => {
+      if (ws.isAlive === false) return ws.terminate();
+      
+      ws.isAlive = false;
+      ws.ping();
+    });
+  }, 30000);
+
+  wss.on('close', () => {
+    clearInterval(interval);
   });
   
   // Handle incoming messages from WebUI

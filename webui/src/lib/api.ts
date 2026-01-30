@@ -66,4 +66,10 @@ export class API {
     if (!res.ok) throw new Error('Failed to fetch file content');
     return res.json();
   }
+
+  static async getGitHubIssues(owner: string, repo: string) {
+    const res = await this.fetch(`/api/github/issues?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`);
+    if (!res.ok) throw new Error('Failed to fetch GitHub issues');
+    return res.json();
+  }
 }
