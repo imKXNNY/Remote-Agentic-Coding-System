@@ -10,6 +10,7 @@ import { Conversation, CommandResult } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
+import { runCodexReview } from './codex-cli';
 
 const execAsync = promisify(exec);
 
@@ -86,6 +87,9 @@ Command Management:
   /commands - List registered
   Note: Commands use relative paths (e.g., .claude/commands)
 
+Codex Integration:
+  /codex-review [branch|commit|uncommitted] [target] - Run native Codex review
+
 Codebase:
   /clone <repo-url> - Clone repository
   /repos - List workspace repositories
@@ -98,6 +102,40 @@ Session:
   /reset - Clear session
   /help - Show help`,
       };
+
+    case 'codex-review': {
+      if (!conversation.cwd) {
+        return { success: false, message: 'No working directory set. Use /clone or /setcwd first.' };
+      }
+
+      const modeStr = args[0]?.toLowerCase();
+      const target = args[1];
+
+      let reviewMode: 'branch' | 'uncommitted' | 'commit' | undefined;
+
+      if (modeStr === 'branch') reviewMode = 'branch';
+      else if (modeStr === 'uncommitted') reviewMode = 'uncommitted';
+      else if (modeStr === 'commit') reviewMode = 'commit';
+      else if (modeStr) {
+         return { success: false, message: 'Usage: /codex-review [branch <name> | commit <sha> | uncommitted]' };
+      }
+
+      try {
+        const output = await runCodexReview({
+          workingDir: conversation.cwd,
+          target,
+          reviewMode,
+        });
+
+        return {
+          success: true,
+          message: `**Codex Review Results**\n\n${output}`,
+        };
+      } catch (error) {
+        const err = error as Error;
+        return { success: false, message: `Codex Review Failed: ${err.message}` };
+      }
+    }
 
     case 'status': {
       let msg = `Platform: ${conversation.platform_type}\nAI Assistant: ${conversation.ai_assistant_type}`;
