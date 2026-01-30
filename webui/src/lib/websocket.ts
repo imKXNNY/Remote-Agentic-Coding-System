@@ -54,18 +54,24 @@ export function connect() {
   };
 }
 
-export function sendMessage(conversationId: string, text: string) {
+export function sendMessage(conversationId: string, text: string, attachments: string[] = []) {
   if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({
       type: 'message',
       conversationId,
-      content: text
+      content: text,
+      attachments
     }));
     
     // Optimistic update
     messages.update(m => [...m, {
          type: 'message', 
-         payload: { role: 'user', content: text, timestamp: Date.now() } 
+         payload: { 
+           role: 'user', 
+           content: text, 
+           timestamp: Date.now(),
+           attachments 
+         } 
     }]);
   } else {
     console.warn('WS not connected');

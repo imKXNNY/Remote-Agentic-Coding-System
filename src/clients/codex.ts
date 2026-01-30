@@ -44,12 +44,20 @@ export class CodexClient implements IAssistantClient {
    * @param prompt - User message or prompt
    * @param cwd - Working directory for Codex
    * @param resumeSessionId - Optional thread ID to resume
+   * @param attachments - Optional list of file paths to attach
    */
   async *sendQuery(
     prompt: string,
     cwd: string,
-    resumeSessionId?: string
+    resumeSessionId?: string,
+    attachments?: string[]
   ): AsyncGenerator<MessageChunk> {
+    // Check for attachments - use CLI fallback if present
+    if (attachments && attachments.length > 0) {
+      yield* this.runWithCli(prompt, cwd, attachments, resumeSessionId);
+      return;
+    }
+
     const codex = await getCodex();
 
     // Get or create thread (synchronous operations!)
@@ -149,6 +157,62 @@ export class CodexClient implements IAssistantClient {
     } catch (error) {
       console.error('[Codex] Query error:', error);
       throw new Error(`Codex query failed: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Run Codex CLI for image inputs (SDK fallback)
+   */
+  private async *runWithCli(
+    prompt: string,
+    cwd: string,
+    attachments: string[],
+    resumeSessionId?: string
+  ): AsyncGenerator<MessageChunk> {
+    const { spawn } = await import('child_process');
+    
+    console.log(`[Codex] Running CLI with ${attachments.length} attachments`);
+    
+    // Construct args: codex exec "prompt" -i path1 -i path2
+    const args = ['exec', prompt];
+    for (const att of attachments) {
+      args.push('-i', att); 
+    }
+    
+    // Attempt to pass session context if possible (CLI dependent)
+    if (resumeSessionId) {
+       // args.push('--thread', resumeSessionId); // Hypothetical
+    }
+
+    const child = spawn('codex', args, {
+      cwd,
+      env: { ...process.env, FORCE_COLOR: '1' }
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    child.stdout.on('data', (data) => {
+      const text = data.toString();
+      stdout += text;
+      // We could try to stream yield here if possible, but CLI might buffer
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+      console.error(`[Codex CLI stderr]: ${data}`);
+    });
+
+    // Wait for completion
+    // Wrapping in promise to await inside generator
+    const code = await new Promise<number>((resolve) => {
+      child.on('close', resolve);
+    });
+
+    if (code !== 0) {
+       yield { type: 'system', content: `⚠️ Codex CLI failed: ${stderr}` };
+    } else {
+       yield { type: 'assistant', content: stdout || 'analysis complete.' };
     }
   }
 

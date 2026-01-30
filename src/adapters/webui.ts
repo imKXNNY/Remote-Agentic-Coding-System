@@ -9,7 +9,7 @@ interface WebUIEvent {
 
 export class WebUIAdapter implements IPlatformAdapter {
   private clients = new Map<string, Set<WebSocket>>();
-  private messageHandler: ((conversationId: string, content: string) => void) | null = null;
+  private messageHandler: ((conversationId: string, content: string, attachments?: string[]) => void) | null = null;
 
   constructor() {
     this.clients = new Map();
@@ -17,7 +17,7 @@ export class WebUIAdapter implements IPlatformAdapter {
 
 
 
-  onMessage(handler: (conversationId: string, content: string) => void) {
+  onMessage(handler: (conversationId: string, content: string, attachments?: string[]) => void) {
     this.messageHandler = handler;
   }
 
@@ -34,7 +34,8 @@ export class WebUIAdapter implements IPlatformAdapter {
           console.log(`[WebUI] Client joined conversation ${conversationId}`);
         } else if (event.type === 'message') {
            if (this.messageHandler && event.conversationId && event.content) {
-             this.messageHandler(event.conversationId, event.content);
+             const attachments = Array.isArray(event.attachments) ? event.attachments : [];
+             this.messageHandler(event.conversationId, event.content, attachments);
            }
         }
       } catch (err) {

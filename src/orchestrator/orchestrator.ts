@@ -18,7 +18,8 @@ export async function handleMessage(
   platform: IPlatformAdapter,
   conversationId: string,
   message: string,
-  issueContext?: string // Optional GitHub issue/PR context to append AFTER command loading
+  issueContext?: string, // Optional GitHub issue/PR context to append AFTER command loading
+  attachments: string[] = [] // Optional attachments (paths)
 ): Promise<void> {
   try {
     console.log(`[Orchestrator] Handling message for conversation ${conversationId}`);
@@ -162,7 +163,8 @@ export async function handleMessage(
       for await (const msg of aiClient.sendQuery(
         promptToSend,
         cwd,
-        session.assistant_session_id || undefined
+        session.assistant_session_id || undefined,
+        attachments
       )) {
         if (msg.type === 'assistant' && msg.content) {
           fullAssistantResponse += msg.content;

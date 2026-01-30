@@ -220,6 +220,11 @@ async function main(): Promise<void> {
   const webui = new WebUIAdapter();
   // We'll set the WSS later after creating it
 
+  // Register Upload Route
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  const uploadRouter = require('./routes/upload').default;
+  app.use('/api', authMiddleware, uploadRouter);
+
   // API Routes (Protected)
   app.get('/api/conversations', authMiddleware, async (_req, res) => {
     try {
@@ -411,9 +416,9 @@ async function main(): Promise<void> {
   });
   
   // Handle incoming messages from WebUI
-  webui.onMessage((conversationId, content) => {
+  webui.onMessage((conversationId, content, attachments) => {
       lockManager.acquireLock(conversationId, async () => {
-          await handleMessage(webui, conversationId, content);
+          await handleMessage(webui, conversationId, content, undefined, attachments);
       });
   });
 

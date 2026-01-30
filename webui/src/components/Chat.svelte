@@ -24,6 +24,9 @@
   let conversationList: Conversation[] = [];
   let historyMessages: any[] = [];
   let input = '';
+  let pendingAttachments: { path: string; name: string }[] = [];
+  let isUploading = false;
+  let fileInput: HTMLInputElement;
   let messagesDiv: HTMLDivElement;
   let joined = false;
   let showControls = false;
@@ -94,10 +97,51 @@
     await loadHistory(conversationId);
   }
 
+  async function uploadFile(file: File) {
+    const formData = new FormData();
+    formData.append('file', file);
+    isUploading = true;
+
+    try {
+      const res = await fetch('/api/upload', {
+        method: 'POST',
+        headers: API.getAuthHeader(),
+        body: formData,
+      });
+      const data = await res.json();
+      if (data.success) {
+        pendingAttachments = [...pendingAttachments, { path: data.path, name: data.originalName }];
+      } else {
+        console.error('Upload failed:', data.error);
+      }
+    } catch (e) {
+      console.error('Upload error:', e);
+    } finally {
+      isUploading = false;
+    }
+  }
+
+  function handleFileSelect(event: Event) {
+    const input = event.target as HTMLInputElement;
+    if (input.files && input.files[0]) {
+      uploadFile(input.files[0]);
+    }
+    input.value = ''; // Reset
+  }
+
+  function removeAttachment(index: number) {
+    pendingAttachments = pendingAttachments.filter((_, i) => i !== index);
+  }
+
   function send() {
-    if (!input.trim()) return;
-    sendMessage(conversationId, input);
+    if (!input.trim() && pendingAttachments.length === 0) return;
+    sendMessage(
+      conversationId,
+      input,
+      pendingAttachments.map(a => a.path)
+    );
     input = '';
+    pendingAttachments = [];
   }
 
   function handleKey(e: KeyboardEvent) {
@@ -181,6 +225,39 @@
 
       <div class="input-container">
         <div class="input-wrapper glass">
+          {#if pendingAttachments.length > 0}
+            <div class="attachments-preview">
+              {#each pendingAttachments as att, i}
+                <span class="badgex">
+                  📎 {att.name}
+                  <button on:click={() => removeAttachment(i)}>×</button>
+                </span>
+              {/each}
+            </div>
+          {/if}
+
+          <input
+            type="file"
+            bind:this={fileInput}
+            hidden
+            on:change={handleFileSelect}
+            accept="image/*,text/*"
+          />
+
+          <button
+            class="upload-btn"
+            on:click={() => fileInput.click()}
+            disabled={isUploading}
+            title="Attach file"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18">
+              <path
+                fill="currentColor"
+                d="M16.5 6v11.5c0 2.21-1.79 4-4 4s-4-1.79-4-4V5a2.5 2.5 0 0 1 5 0v10.5c0 .55-.45 1-1 1s-1-.45-1-1V6H10v9.5a2.5 2.5 0 0 0 5 0V5c0-2.21-1.79-4-4-4S7 2.79 7 5v12.5c0 3.04 2.46 5.5 5.5 5.5s5.5-2.46 5.5-5.5V6h-1.5z"
+              />
+            </svg>
+          </button>
+
           <textarea
             bind:value={input}
             on:keydown={handleKey}
@@ -190,7 +267,7 @@
           <button
             class="send-btn"
             on:click={send}
-            disabled={$status !== 'connected' || !input.trim()}
+            disabled={$status !== 'connected' || (!input.trim() && pendingAttachments.length === 0)}
             aria-label="Send message"
           >
             <svg viewBox="0 0 24 24" width="18" height="18">
@@ -445,5 +522,56 @@
     color: var(--text-muted);
     cursor: not-allowed;
     opacity: 0.5;
+  }
+
+  .upload-btn {
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    padding: 8px;
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+  }
+  .upload-btn:hover {
+    color: var(--accent-blue);
+    background: rgba(255, 255, 255, 0.05);
+  }
+
+  .attachments-preview {
+    width: 100%;
+    margin-bottom: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .badgex {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .badgex button {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0 2px;
+  }
+  .badgex button:hover {
+    color: var(--error-red);
+  }
+
+  .input-wrapper {
+    flex-wrap: wrap;
   }
 </style>

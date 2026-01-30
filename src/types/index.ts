@@ -96,8 +96,9 @@ export interface IAssistantClient {
    * @param prompt - User message or prompt
    * @param cwd - Working directory for the assistant
    * @param resumeSessionId - Optional session ID to resume
+   * @param attachments - Optional list of file paths to attach
    */
-  sendQuery(prompt: string, cwd: string, resumeSessionId?: string): AsyncGenerator<MessageChunk>;
+  sendQuery(prompt: string, cwd: string, resumeSessionId?: string, attachments?: string[]): AsyncGenerator<MessageChunk>;
 
   /**
    * Get the assistant type identifier
