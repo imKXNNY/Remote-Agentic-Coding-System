@@ -12,28 +12,25 @@
 
 ---
 
-## 🔴 P0: Critical (Quick Wins)
+## ✅ P0: Critical (Quick Wins) — COMPLETED
 
-### 1. Add `.codex/commands` Folder Support
-**Value**: Parity with Claude  
-**Effort**: 1 line change  
-**File**: `src/handlers/command-handler.ts:275`
+### 1. ~~Add `.codex/commands` Folder Support~~ ✅
+**Status**: Implemented  
+**Commit**: `feat: add .codex/commands support and enable web search (P0 quick wins)`
 
 ```typescript
-// Current
-for (const folder of ['.claude/commands', '.agents/commands']) {
-// Proposed
+// Updated in src/handlers/command-handler.ts:275
 for (const folder of ['.claude/commands', '.codex/commands', '.agents/commands']) {
 ```
 
 ---
 
-### 2. Enable Web Search (`--search`)
-**Value**: External knowledge for prompts  
-**Effort**: Config update to `setup-auth.ts`
+### 2. ~~Enable Web Search (`--search`)~~ ✅
+**Status**: Implemented  
+**Commit**: `feat: add .codex/commands support and enable web search (P0 quick wins)`
 
 ```toml
-[features]
+# Added to src/scripts/setup-auth.ts config.toml generation
 web_search = "live"
 ```
 
