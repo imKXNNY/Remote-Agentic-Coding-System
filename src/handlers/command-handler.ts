@@ -272,7 +272,7 @@ Session:
 
         // Detect command folders
         let commandFolder: string | null = null;
-        for (const folder of ['.claude/commands', '.agents/commands']) {
+        for (const folder of ['.claude/commands', '.codex/commands', '.agents/commands']) {
           try {
             await access(join(targetPath, folder));
             commandFolder = folder;
