@@ -208,6 +208,34 @@ DEFAULT_AI_ASSISTANT=codex
 
 You must configure **at least one** platform to interact with your AI assistant.
 
+</details>
+
+<details>
+<summary><b>💻 WebUI (Browser)</b></summary>
+
+**Browser-based interface for local development.**
+
+**Features:**
+- Real-time chat with AI
+- File tree browsing & code preview (Monaco Editor)
+- WebSocket streaming
+
+**Configuration:**
+
+1. Set credentials in `.env`:
+```env
+WEBUI_USER=admin
+WEBUI_PASSWORD=secure_password_here
+```
+
+2. Access interface:
+- URL: `http://localhost:3000`
+- Login with configured credentials
+
+**Note:** In production, ensure port 3000 is protected or used behind a reverse proxy tailored for WebSockets.
+
+</details>
+
 <details>
 <summary><b>💬 Telegram</b></summary>
 
