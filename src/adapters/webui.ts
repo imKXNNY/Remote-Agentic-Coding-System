@@ -1,5 +1,5 @@
 import { IPlatformAdapter } from '../types';
-import { WebSocket, WebSocketServer } from 'ws';
+import { WebSocket } from 'ws';
 import { IncomingMessage } from 'http';
 
 interface WebUIEvent {
@@ -9,20 +9,13 @@ interface WebUIEvent {
 
 export class WebUIAdapter implements IPlatformAdapter {
   private clients = new Map<string, Set<WebSocket>>();
-  private wss: WebSocketServer | null = null;
   private messageHandler: ((conversationId: string, content: string) => void) | null = null;
 
   constructor() {
     this.clients = new Map();
   }
 
-  setWebSocketServer(wss: WebSocketServer) {
-    this.wss = wss;
-    
-    this.wss.on('connection', (ws: WebSocket, req: IncomingMessage) => {
-      this.handleConnection(ws, req);
-    });
-  }
+
 
   onMessage(handler: (conversationId: string, content: string) => void) {
     this.messageHandler = handler;

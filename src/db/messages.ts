@@ -24,6 +24,13 @@ export async function saveMessage(
 }
 
 export async function getMessages(conversationId: string): Promise<Message[]> {
+  // Gracefully handle non-UUID strings (like initial WebUI 'default-TIMESTAMP' IDs)
+  // to avoid Postgres syntax errors.
+  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if (!uuidRegex.test(conversationId)) {
+    return [];
+  }
+
   const result = await pool.query<Message>(
     'SELECT id, conversation_id, role, content, timestamp FROM remote_agent_messages WHERE conversation_id = $1 ORDER BY timestamp ASC',
     [conversationId]

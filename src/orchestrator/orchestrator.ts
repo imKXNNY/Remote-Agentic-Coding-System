@@ -8,6 +8,7 @@ import { IPlatformAdapter } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
+import * as messageDb from '../db/messages';
 import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '../utils/tool-formatter';
 import { substituteVariables } from '../utils/variable-substitution';
@@ -24,6 +25,9 @@ export async function handleMessage(
 
     // Get or create conversation
     let conversation = await db.getOrCreateConversation(platform.getPlatformType(), conversationId);
+
+    // SAVE User Message for history
+    await messageDb.saveMessage(conversation.id, 'user', message);
 
     // Handle slash commands (except /command-invoke which needs AI)
     if (message.startsWith('/')) {
@@ -151,6 +155,8 @@ export async function handleMessage(
     const mode = platform.getStreamingMode();
     console.log(`[Orchestrator] Streaming mode: ${mode}`);
 
+    let fullAssistantResponse = '';
+
     if (mode === 'stream') {
       // Stream mode: Send each chunk immediately
       for await (const msg of aiClient.sendQuery(
@@ -159,6 +165,7 @@ export async function handleMessage(
         session.assistant_session_id || undefined
       )) {
         if (msg.type === 'assistant' && msg.content) {
+          fullAssistantResponse += msg.content;
           await platform.sendMessage(conversationId, msg.content);
         } else if (msg.type === 'tool' && msg.toolName) {
           // Format and send tool call notification
@@ -192,42 +199,27 @@ export async function handleMessage(
         }
       }
 
-      // Log all chunks for observability
-      console.log(`[Orchestrator] Received ${allChunks.length} chunks total`);
-      console.log(`[Orchestrator] Assistant messages: ${assistantMessages.length}`);
-
       // Extract clean summary from the last message
-      // Tool indicators from Claude Code: 🔧, 💭, etc.
-      // These appear at the start of lines showing tool usage
-      let finalMessage = '';
-
       if (assistantMessages.length > 0) {
         const lastMessage = assistantMessages[assistantMessages.length - 1];
-
-        // Split by double newlines to separate tool sections from summary
         const sections = lastMessage.split('\n\n');
-
-        // Filter out sections that start with tool indicators
-        // Using alternation for emojis with variation selectors
         const toolIndicatorRegex = /^(?:\u{1F527}|\u{1F4AD}|\u{1F4DD}|\u{270F}\u{FE0F}|\u{1F5D1}\u{FE0F}|\u{1F4C2}|\u{1F50D})/u;
         const cleanSections = sections.filter(section => {
           const trimmed = section.trim();
           return !toolIndicatorRegex.exec(trimmed);
         });
-
-        // Join remaining sections (this is the summary without tool indicators)
-        finalMessage = cleanSections.join('\n\n').trim();
-
-        // If we filtered everything out, fall back to last message
-        if (!finalMessage) {
-          finalMessage = lastMessage;
-        }
+        fullAssistantResponse = cleanSections.join('\n\n').trim() || lastMessage;
       }
 
-      if (finalMessage) {
-        console.log(`[Orchestrator] Sending final message (${finalMessage.length} chars)`);
-        await platform.sendMessage(conversationId, finalMessage);
+      if (fullAssistantResponse) {
+        console.log(`[Orchestrator] Sending final message (${fullAssistantResponse.length} chars)`);
+        await platform.sendMessage(conversationId, fullAssistantResponse);
       }
+    }
+
+    // SAVE Assistant Message for history
+    if (fullAssistantResponse) {
+      await messageDb.saveMessage(conversation.id, 'assistant', fullAssistantResponse);
     }
 
     // Track last command in metadata (for plan→execute detection)

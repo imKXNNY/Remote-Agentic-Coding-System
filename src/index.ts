@@ -16,9 +16,12 @@ import { TelegramAdapter } from './adapters/telegram';
 import { TestAdapter } from './adapters/test';
 import { GitHubAdapter } from './adapters/github';
 import { WebUIAdapter } from './adapters/webui';
+import * as messageDb from './db/messages';
+import * as codebaseDb from './db/codebases';
 import { handleMessage } from './orchestrator/orchestrator';
 import { pool } from './db/connection';
 import { ConversationLockManager } from './utils/conversation-lock';
+import { resolveWorkspacePath } from './utils/paths';
 
 async function main(): Promise<void> {
   console.log('[App] Starting Remote Coding Agent (Telegram + Claude MVP)');
@@ -244,17 +247,45 @@ async function main(): Promise<void> {
     }
   });
 
-  app.get('/api/files', authMiddleware, async (req, res) => {
+  app.get('/api/codebases', authMiddleware, async (_req, res) => {
     try {
-      // Prioritize /workspace (Docker mount point) over local ./workspace
-      // But verify it exists first
-      let workspacePath = '/workspace';
-      try {
-        await stat(workspacePath);
-      } catch (e) {
-        workspacePath = process.env.WORKSPACE_PATH || './workspace';
+      const result = await pool.query('SELECT * FROM remote_agent_codebases ORDER BY name ASC');
+      return res.json(result.rows);
+    } catch (error) {
+      console.error('[WebUI] Failed to fetch codebases:', error);
+      return res.status(500).json({ error: 'Failed to fetch codebases' });
+    }
+  });
+
+  app.get('/api/conversations/:id/messages', authMiddleware, async (req, res) => {
+    try {
+      const messages = await messageDb.getMessages(req.params.id);
+      return res.json(messages);
+    } catch (error) {
+      console.error('[WebUI] Failed to fetch messages:', error);
+      return res.status(500).json({ error: 'Failed to fetch messages' });
+    }
+  });
+
+  app.get('/api/conversations/:id/commands', authMiddleware, async (req, res) => {
+    try {
+      const convResult = await pool.query('SELECT codebase_id FROM remote_agent_conversations WHERE id = $1', [req.params.id]);
+      const codebaseId = convResult.rows[0]?.codebase_id;
+      
+      if (!codebaseId) {
+        return res.json({});
       }
       
+      const commands = await codebaseDb.getCodebaseCommands(codebaseId);
+      return res.json(commands);
+    } catch (error) {
+      console.error('[WebUI] Failed to fetch commands:', error);
+      return res.status(500).json({ error: 'Failed to fetch commands' });
+    }
+  });
+
+  app.get('/api/files', authMiddleware, async (req, res) => {
+    try {
       const relPath = (req.query.path as string) || '';
       
       // Prevent directory traversal
@@ -262,7 +293,7 @@ async function main(): Promise<void> {
         return res.status(400).json({ error: 'Invalid path' });
       }
 
-      const fullPath = join(workspacePath, relPath);
+      const fullPath = await resolveWorkspacePath(relPath);
       const statInfo = await stat(fullPath);
 
       if (!statInfo.isDirectory()) {
@@ -284,18 +315,11 @@ async function main(): Promise<void> {
 
   app.get('/api/files/content', authMiddleware, async (req, res) => {
     try {
-       let workspacePath = '/workspace';
-       try {
-         await stat(workspacePath);
-       } catch (e) {
-         workspacePath = process.env.WORKSPACE_PATH || './workspace';
-       }
-
        const relPath = (req.query.path as string) || '';
 
        if (relPath.includes('..')) return res.status(400).json({ error: 'Invalid path' });
        
-       const fullPath = join(workspacePath, relPath);
+       const fullPath = await resolveWorkspacePath(relPath);
        // Simple check if text file? Monaca handles many, let's just send content for MVP
        // Maybe size limit
        const statInfo = await stat(fullPath);
@@ -385,8 +409,6 @@ async function main(): Promise<void> {
      // Delegate to adapter
      webui.handleConnection(ws, req);
   });
-  
-  webui.setWebSocketServer(wss);
   
   // Handle incoming messages from WebUI
   webui.onMessage((conversationId, content) => {

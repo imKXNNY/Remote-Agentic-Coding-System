@@ -8,6 +8,8 @@
     sendMessage,
     joinConversation as wsJoin,
   } from '../lib/websocket';
+  import CommandPalette from './CommandPalette.svelte';
+  import ContextSelector from './ContextSelector.svelte';
 
   interface Conversation {
     id: string;
@@ -15,19 +17,27 @@
     updated_at: string;
     project_name?: string;
     cwd?: string;
+    codebase_id?: string;
   }
 
   let conversationId = '';
   let conversationList: Conversation[] = [];
+  let historyMessages: any[] = [];
   let input = '';
   let messagesDiv: HTMLDivElement;
   let joined = false;
+  let showControls = false;
 
-  $: currentMessages = $messages.filter(
+  $: selectedConversation = conversationList.find(c => c.id === conversationId);
+  $: selectedCodebaseId = selectedConversation?.codebase_id || null;
+
+  $: liveMessages = $messages.filter(
     m =>
       m.type === 'message' &&
       (!m.payload || !m.payload.conversationId || m.payload.conversationId === conversationId)
   );
+
+  $: currentMessages = [...historyMessages, ...liveMessages];
 
   $: groupedConversations = conversationList.reduce(
     (acc, conv) => {
@@ -44,11 +54,31 @@
     joined = true;
   }
 
+  async function loadHistory(id: string) {
+    if (!id) return;
+    try {
+      const history = await API.getMessages(id);
+      historyMessages = history.map((m: any) => ({
+        type: 'message',
+        payload: {
+          role: m.role,
+          content: m.content,
+          timestamp: m.timestamp,
+          conversationId: id,
+        },
+      }));
+    } catch (e) {
+      console.error('Failed to load history:', e);
+      historyMessages = [];
+    }
+  }
+
   onMount(async () => {
     try {
       conversationList = await API.getConversations();
       if (conversationList.length > 0) {
         conversationId = conversationList[0].id;
+        await loadHistory(conversationId);
       } else {
         // Create new ID if none exist (random or timestamp)
         conversationId = 'default-' + Date.now();
@@ -59,8 +89,9 @@
     }
   });
 
-  function handleJoin() {
+  async function handleJoin() {
     joined = false; // Reset joined flag to trigger reactive join
+    await loadHistory(conversationId);
   }
 
   function send() {
@@ -74,6 +105,11 @@
       e.preventDefault();
       send();
     }
+  }
+
+  function handleControlAction(event: CustomEvent<string>) {
+    const content = event.detail;
+    sendMessage(conversationId, content);
   }
 
   afterUpdate(() => {
@@ -103,51 +139,74 @@
       </select>
     </div>
     <div class="connection-status">
+      <button
+        class="controls-toggle {showControls ? 'active' : ''}"
+        on:click={() => (showControls = !showControls)}
+        title="Toggle tools"
+      >
+        <svg viewBox="0 0 24 24" width="18" height="18">
+          <path
+            fill="currentColor"
+            d="M22.7 19l-9.1-9.1c.9-2.3.4-5-1.5-6.9-2-2-5-2.4-7.4-1.3L9 6 6 9 1.6 4.7C.5 7.1.9 10.1 2.9 12.1c1.9 1.9 4.6 2.4 6.9 1.5l9.1 9.1c.4.4 1 .4 1.4 0l2.3-2.3c.5-.4.5-1.1.1-1.4z"
+          />
+        </svg>
+      </button>
       <span class="indicator {$status}"></span>
       <span class="status-text">{$status}</span>
     </div>
   </div>
 
-  <div class="messages-list" bind:this={messagesDiv}>
-    {#each currentMessages as msg}
-      <div class="message-wrapper {msg.payload.role}">
-        <div class="message-bubble shadow">
-          <div class="content">{msg.payload.content}</div>
-          <div class="meta">
-            {new Date(msg.payload.timestamp).toLocaleTimeString([], {
-              hour: '2-digit',
-              minute: '2-digit',
-            })}
+  <div class="chat-main">
+    <div class="chat-viewport">
+      <div class="messages-list" bind:this={messagesDiv}>
+        {#each currentMessages as msg}
+          <div class="message-wrapper {msg.payload.role}">
+            <div class="message-bubble shadow">
+              <div class="content">{msg.payload.content}</div>
+              <div class="meta">
+                {new Date(msg.payload.timestamp).toLocaleTimeString([], {
+                  hour: '2-digit',
+                  minute: '2-digit',
+                })}
+              </div>
+            </div>
           </div>
+        {/each}
+        {#if currentMessages.length === 0}
+          <div class="empty-state">
+            <p>No messages yet. Start by typing below.</p>
+          </div>
+        {/if}
+      </div>
+
+      <div class="input-container">
+        <div class="input-wrapper glass">
+          <textarea
+            bind:value={input}
+            on:keydown={handleKey}
+            placeholder="Ask the Remote Agent..."
+            rows="1"
+          ></textarea>
+          <button
+            class="send-btn"
+            on:click={send}
+            disabled={$status !== 'connected' || !input.trim()}
+            aria-label="Send message"
+          >
+            <svg viewBox="0 0 24 24" width="18" height="18">
+              <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
+            </svg>
+          </button>
         </div>
       </div>
-    {/each}
-    {#if currentMessages.length === 0}
-      <div class="empty-state">
-        <p>No messages yet. Start by typing below.</p>
+    </div>
+
+    {#if showControls}
+      <div class="chat-controls glass shadow">
+        <ContextSelector {selectedCodebaseId} on:select={handleControlAction} />
+        <CommandPalette {conversationId} on:select={handleControlAction} />
       </div>
     {/if}
-  </div>
-
-  <div class="input-container">
-    <div class="input-wrapper glass">
-      <textarea
-        bind:value={input}
-        on:keydown={handleKey}
-        placeholder="Ask the Remote Agent..."
-        rows="1"
-      ></textarea>
-      <button
-        class="send-btn"
-        on:click={send}
-        disabled={$status !== 'connected' || !input.trim()}
-        aria-label="Send message"
-      >
-        <svg viewBox="0 0 24 24" width="18" height="18">
-          <path fill="currentColor" d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" />
-        </svg>
-      </button>
-    </div>
   </div>
 </div>
 
@@ -210,6 +269,38 @@
     color: var(--text-muted);
   }
 
+  .controls-toggle {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    padding: 6px;
+    margin-right: 8px;
+    border-radius: 6px;
+    display: flex;
+    transition: var(--transition-fast);
+  }
+
+  .controls-toggle:hover,
+  .controls-toggle.active {
+    color: var(--accent-blue);
+    background: rgba(14, 99, 156, 0.1);
+  }
+
+  .chat-main {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+    position: relative;
+  }
+
+  .chat-viewport {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
   .messages-list {
     flex: 1;
     overflow-y: auto;
@@ -249,9 +340,31 @@
 
   .message-wrapper.assistant .message-bubble {
     background: var(--bg-tertiary);
-    color: var(--text-primary);
-    border-bottom-left-radius: 2px;
     border: 1px solid var(--border-subtle);
+    border-bottom-left-radius: 4px;
+  }
+
+  .chat-controls {
+    width: 280px;
+    border-left: 1px solid var(--border-subtle);
+    background: var(--bg-secondary);
+    padding: var(--gap-md);
+    display: flex;
+    flex-direction: column;
+    gap: var(--gap-lg);
+    overflow-y: auto;
+    z-index: 5;
+  }
+
+  @media (max-width: 900px) {
+    .chat-controls {
+      position: absolute;
+      right: 0;
+      top: 0;
+      bottom: 0;
+      width: 100%;
+      border-left: none;
+    }
   }
 
   .content {

@@ -37,6 +37,24 @@ export class API {
     return res.json();
   }
 
+  static async getCodebases() {
+    const res = await this.fetch('/api/codebases');
+    if (!res.ok) throw new Error('Failed to fetch codebases');
+    return res.json();
+  }
+
+  static async getMessages(conversationId: string) {
+    const res = await this.fetch(`/api/conversations/${conversationId}/messages`);
+    if (!res.ok) throw new Error('Failed to fetch messages');
+    return res.json();
+  }
+
+  static async getCommands(conversationId: string) {
+    const res = await this.fetch(`/api/conversations/${conversationId}/commands`);
+    if (!res.ok) throw new Error('Failed to fetch commands');
+    return res.json();
+  }
+
   static async getFiles(path: string = '') {
     const res = await this.fetch(`/api/files?path=${encodeURIComponent(path)}`);
     if (!res.ok) throw new Error('Failed to fetch files');
