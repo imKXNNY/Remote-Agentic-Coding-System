@@ -89,6 +89,7 @@ Command Management:
 
 Codex Integration:
   /codex-review [branch|commit|uncommitted] [target] - Run native Codex review
+  /codex-exec <prompt> - Run automated task with JSON output mode
 
 Codebase:
   /clone <repo-url> - Clone repository
@@ -100,8 +101,74 @@ Codebase:
 Session:
   /status - Show state
   /reset - Clear session
-  /help - Show help`,
+  /help - Show help
+  /setmodel <id> - Set assistant model (GPT-5, etc.)
+  /setsandbox <mode> - Set sandbox (read-only, workspace-write, danger-full-access)`,
       };
+
+    case 'setmodel': {
+      if (args.length === 0) {
+        return { success: false, message: 'Usage: /setmodel <model_id>' };
+      }
+      const modelId = args[0];
+      await db.updateConversation(conversation.id, { model_id: modelId });
+      return {
+        success: true,
+        message: `Assistant model for this conversation set to: ${modelId}`,
+        modified: true,
+      };
+    }
+
+    case 'setsandbox': {
+      if (args.length === 0) {
+        return { success: false, message: 'Usage: /setsandbox <read-only | workspace-write | danger-full-access>' };
+      }
+      if (!conversation.codebase_id) {
+        return { success: false, message: 'No codebase context. Use /clone or /setcwd first.' };
+      }
+      const mode = args[0] as 'read-only' | 'workspace-write' | 'danger-full-access';
+      if (!['read-only', 'workspace-write', 'danger-full-access'].includes(mode)) {
+        return { success: false, message: 'Invalid sandbox mode.' };
+      }
+      await codebaseDb.updateCodebaseSandboxMode(conversation.codebase_id, mode);
+      return {
+        success: true,
+        message: `Sandbox mode for codebase set to: ${mode}`,
+        modified: true,
+      };
+    }
+
+    case 'codex-exec': {
+      if (args.length === 0) {
+        return { success: false, message: 'Usage: /codex-exec <prompt>' };
+      }
+      if (!conversation.codebase_id) {
+        return { success: false, message: 'No codebase context. Use /clone or /setcwd first.' };
+      }
+      
+      const prompt = args.join(' ');
+      const { getAssistantClient } = await import('../clients/factory');
+      const aiClient = getAssistantClient('codex');
+      const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
+      const cwd = conversation.cwd || codebase?.default_cwd || '/workspace';
+      
+      try {
+        let output = '';
+        for await (const chunk of aiClient.sendQuery(prompt, cwd, undefined, undefined, { outputFormat: 'json' })) {
+          if (chunk.type === 'assistant' && chunk.content) {
+            output += chunk.content;
+          } else if (chunk.type === 'tool' ) {
+            output += `\n[Tool: ${chunk.toolName}]\n`;
+          }
+        }
+        return {
+          success: true,
+          message: `**Codex Exec (JSON Mode) Output:**\n\n${output || 'No output returned.'}`,
+        };
+      } catch (error) {
+        return { success: false, message: `Codex Exec Failed: ${(error as Error).message}` };
+      }
+    }
 
     case 'codex-review': {
       if (!conversation.cwd) {

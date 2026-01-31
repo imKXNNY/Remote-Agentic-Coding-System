@@ -281,6 +281,17 @@ async function main(): Promise<void> {
     }
   });
 
+  app.get('/api/stats', authMiddleware, async (_req, res) => {
+    try {
+      const { getStats } = await import('./utils/telemetry');
+      const stats = await getStats();
+      res.json(stats);
+    } catch (error) {
+      console.error('[WebUI] Failed to fetch stats:', error);
+      res.status(500).json({ error: 'Failed to fetch stats' });
+    }
+  });
+
   app.get('/api/conversations/:id/commands', authMiddleware, async (req, res) => {
     try {
       const convResult = await pool.query('SELECT codebase_id FROM remote_agent_conversations WHERE id = $1', [req.params.id]);

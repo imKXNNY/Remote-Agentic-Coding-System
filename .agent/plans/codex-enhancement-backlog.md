@@ -38,16 +38,17 @@ web_search = "live"
 
 ## 🟠 P1: High Priority
 
-### 3. Implement `/review` Slash Command
-**Value**: Built-in code review (vs base branch, uncommitted, commit)  
-**Effort**: 1-2 days  
+### 3. ~~Implement `/review` Slash Command~~ ✅
+**Status**: Implemented (`/codex-review`)
+**Value**: Built-in code review (vs base base, uncommitted, commit)
+**Effort**: 1-2 days
 **Approach**: Spawn `codex review` CLI subprocess
 
 ```
-/review              # Interactive picker
-/review branch main  # Diff against main
-/review uncommitted  # Staged + unstaged
-/review commit abc   # Specific commit SHA
+/codex-review              # Interactive picker
+/codex-review branch main  # Diff against main
+/codex-review uncommitted  # Staging + unstaged
+/codex-review commit abc   # Specific commit SHA
 ```
 
 ---
@@ -68,9 +69,10 @@ web_search = "live"
 
 ---
 
-### 5. Image Input Support (WebUI)
-**Value**: Screenshot debugging, design implementation  
-**Effort**: 2-3 days  
+### 5. ~~Image Input Support (WebUI)~~ ✅
+**Status**: Implemented (Clip button + Paste support)
+**Value**: Screenshot debugging, design implementation
+**Effort**: 2-3 days
 **Components**:
 - WebUI: File upload → base64/temp file
 - Backend: Pass to Codex via `-i` flag (CLI) or thread options (SDK)
@@ -79,9 +81,10 @@ web_search = "live"
 
 ## 🟡 P2: Medium Priority
 
-### 6. Model Selection via `/setmodel`
-**Value**: Switch between gpt-5, gpt-5-codex, etc.  
-**Effort**: 1 day  
+### 6. ~~Model Selection via `/setmodel`~~ ✅
+**Status**: Implemented
+**Value**: Switch between gpt-5, gpt-5-codex, etc.
+**Effort**: 1 day
 **Changes**:
 - Add `/setmodel <model>` command
 - Store in conversation metadata
@@ -89,19 +92,21 @@ web_search = "live"
 
 ---
 
-### 7. Per-Codebase Sandbox Configuration
-**Value**: Security flexibility  
-**Effort**: 2-3 days  
+### 7. ~~Per-Codebase Sandbox Configuration~~ ✅
+**Status**: Implemented
+**Value**: Security flexibility
+**Effort**: 2-3 days
 **Changes**:
 - Add `sandbox_mode` column to `remote_agent_codebases`
 - UI for selecting: `read-only`, `workspace-write`, `danger-full-access`
-- Pass to Codex on thread creation
+- Pass to Codex on thread creation (via `/setsandbox`)
 
 ---
 
-### 8. JSONL Output Mode for Automation
-**Value**: Better event streaming for CI/CD  
-**Effort**: 1-2 days  
+### 8. ~~JSONL Output Mode for Automation~~ ✅
+**Status**: Implemented (via `CodexClient` and `/codex-exec`)
+**Value**: Better event streaming for CI/CD
+**Effort**: 1-2 days
 **Approach**: For automated tasks, spawn `codex exec --json` instead of SDK
 
 ---

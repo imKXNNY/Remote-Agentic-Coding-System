@@ -40,7 +40,7 @@ export async function getOrCreateConversation(
 
 export async function updateConversation(
   id: string,
-  updates: Partial<Pick<Conversation, 'codebase_id' | 'cwd' | 'ai_assistant_type'>>
+  updates: Partial<Pick<Conversation, 'codebase_id' | 'cwd' | 'ai_assistant_type' | 'model_id'>>
 ): Promise<void> {
   const fields: string[] = [];
   const values: (string | null)[] = [];
@@ -57,6 +57,10 @@ export async function updateConversation(
   if (updates.ai_assistant_type !== undefined) {
     fields.push(`ai_assistant_type = $${i++}`);
     values.push(updates.ai_assistant_type);
+  }
+  if (updates.model_id !== undefined) {
+    fields.push(`model_id = $${i++}`);
+    values.push(updates.model_id);
   }
 
   if (fields.length === 0) {

@@ -9,6 +9,7 @@ export interface Conversation {
   codebase_id: string | null;
   cwd: string | null;
   ai_assistant_type: string;
+  model_id: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -19,6 +20,7 @@ export interface Codebase {
   repository_url: string | null;
   default_cwd: string;
   ai_assistant_type: string;
+  sandbox_mode: 'read-only' | 'workspace-write' | 'danger-full-access';
   commands: Record<string, { path: string; description: string }>;
   created_at: Date;
   updated_at: Date;
@@ -97,8 +99,15 @@ export interface IAssistantClient {
    * @param cwd - Working directory for the assistant
    * @param resumeSessionId - Optional session ID to resume
    * @param attachments - Optional list of file paths to attach
+   * @param options - Optional configuration like model or sandbox mode
    */
-  sendQuery(prompt: string, cwd: string, resumeSessionId?: string, attachments?: string[]): AsyncGenerator<MessageChunk>;
+  sendQuery(
+    prompt: string, 
+    cwd: string, 
+    resumeSessionId?: string, 
+    attachments?: string[],
+    options?: { model?: string; sandbox?: string; outputFormat?: 'text' | 'json' }
+  ): AsyncGenerator<MessageChunk>;
 
   /**
    * Get the assistant type identifier

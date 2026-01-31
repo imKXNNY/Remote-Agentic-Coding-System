@@ -9,11 +9,13 @@ export async function createCodebase(data: {
   repository_url?: string;
   default_cwd: string;
   ai_assistant_type?: string;
+  sandbox_mode?: 'read-only' | 'workspace-write' | 'danger-full-access';
 }): Promise<Codebase> {
   const assistantType = data.ai_assistant_type || 'claude';
+  const sandboxMode = data.sandbox_mode || 'workspace-write';
   const result = await pool.query<Codebase>(
-    'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type) VALUES ($1, $2, $3, $4) RETURNING *',
-    [data.name, data.repository_url || null, data.default_cwd, assistantType]
+    'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type, sandbox_mode) VALUES ($1, $2, $3, $4, $5) RETURNING *',
+    [data.name, data.repository_url || null, data.default_cwd, assistantType, sandboxMode]
   );
   return result.rows[0];
 }
@@ -70,4 +72,13 @@ export async function findBestCodebaseForPath(path: string): Promise<Codebase | 
     [path]
   );
   return result.rows[0] || null;
+}
+export async function updateCodebaseSandboxMode(
+  id: string,
+  mode: 'read-only' | 'workspace-write' | 'danger-full-access'
+): Promise<void> {
+  await pool.query(
+    'UPDATE remote_agent_codebases SET sandbox_mode = $1, updated_at = NOW() WHERE id = $2',
+    [mode, id]
+  );
 }

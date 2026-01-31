@@ -1,0 +1,56 @@
+
+D:\VSCode Projects\Personal Projects\Remote-Agentic-Coding-System\src\clients\codex.ts
+   86:11   warning  Unsafe assignment of an `any` value                                                                        @typescript-eslint/no-unsafe-assignment
+   86:44   error    Unexpected any. Specify a different type                                                                   @typescript-eslint/no-explicit-any
+   90:83   warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator  @typescript-eslint/prefer-nullish-coalescing
+   90:126  warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator  @typescript-eslint/prefer-nullish-coalescing
+   95:9    warning  Unsafe assignment of an `any` value                                                                        @typescript-eslint/no-unsafe-assignment
+   95:42   error    Unexpected any. Specify a different type                                                                   @typescript-eslint/no-explicit-any
+  117:60   warning  Unnecessary optional chain on a non-nullish value                                                          @typescript-eslint/no-unnecessary-condition
+  120:51   warning  Unnecessary optional chain on a non-nullish value                                                          @typescript-eslint/no-unnecessary-condition
+  159:56   warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator  @typescript-eslint/prefer-nullish-coalescing
+  199:17   warning  Invalid operand for a '+' operation. Operands must each be a number or string. Got `any`                   @typescript-eslint/restrict-plus-operands
+  199:17   error    Unsafe call of a(n) `any` typed value                                                                      @typescript-eslint/no-unsafe-call
+  199:23   warning  Unsafe member access .toString on an `any` value                                                           @typescript-eslint/no-unsafe-member-access
+  201:28   warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator  @typescript-eslint/prefer-nullish-coalescing
+  206:17   warning  Unsafe assignment of an `any` value                                                                        @typescript-eslint/no-unsafe-assignment
+  208:20   warning  Unsafe member access .type on an `any` value                                                               @typescript-eslint/no-unsafe-member-access
+  208:57   warning  Unsafe member access .text on an `any` value                                                               @typescript-eslint/no-unsafe-member-access
+  209:41   warning  Unsafe assignment of an `any` value                                                                        @typescript-eslint/no-unsafe-assignment
+  209:55   warning  Unsafe member access .text on an `any` value                                                               @typescript-eslint/no-unsafe-member-access
+  210:27   warning  Unsafe member access .type on an `any` value                                                               @typescript-eslint/no-unsafe-member-access
+  210:55   warning  Unsafe member access .type on an `any` value                                                               @typescript-eslint/no-unsafe-member-access
+  211:36   warning  Unsafe assignment of an `any` value                                                                        @typescript-eslint/no-unsafe-assignment
+  211:51   warning  Unsafe member access .name on an `any` value                                                               @typescript-eslint/no-unsafe-member-access
+  211:56   warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator  @typescript-eslint/prefer-nullish-coalescing
+  211:64   warning  Unsafe member access .command on an `any` value                                                            @typescript-eslint/no-unsafe-member-access
+  211:73   warning  Unsafe assignment of an `any` value                                                                        @typescript-eslint/no-unsafe-assignment
+  211:89   warning  Unsafe member access .input on an `any` value                                                              @typescript-eslint/no-unsafe-member-access
+  212:27   warning  Unsafe member access .type on an `any` value                                                               @typescript-eslint/no-unsafe-member-access
+  213:40   warning  Unsafe assignment of an `any` value                                                                        @typescript-eslint/no-unsafe-assignment
+  213:54   warning  Unsafe member access .text on an `any` value                                                               @typescript-eslint/no-unsafe-member-access
+  215:18   error    'e' is defined but never used. Allowed unused caught errors must match /^_/u                               @typescript-eslint/no-unused-vars
+  242:45   warning  Invalid type "number" of template literal expression                                                       @typescript-eslint/restrict-template-expressions
+
+D:\VSCode Projects\Personal Projects\Remote-Agentic-Coding-System\src\handlers\command-handler.ts
+   36:26  warning  Unnecessary optional chain on a non-nullish value                                                                       @typescript-eslint/no-unnecessary-condition
+   54:54  warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator               @typescript-eslint/prefer-nullish-coalescing
+  130:13  warning  Unsafe assignment of an `any` value                                                                                     @typescript-eslint/no-unsafe-assignment
+  130:31  error    Unexpected any. Specify a different type                                                                                @typescript-eslint/no-explicit-any
+  131:76  warning  Unsafe argument of type `any` assigned to a parameter of type `string`                                                  @typescript-eslint/no-unsafe-argument
+  134:76  warning  Unsafe argument of type `any` assigned to a parameter of type `"read-only" | "workspace-write" | "danger-full-access"`  @typescript-eslint/no-unsafe-argument
+  137:55  warning  Invalid type "any" of template literal expression                                                                       @typescript-eslint/restrict-template-expressions
+  153:36  warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator               @typescript-eslint/prefer-nullish-coalescing
+  153:61  warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator               @typescript-eslint/prefer-nullish-coalescing
+  161:35  warning  Invalid type "string | undefined" of template literal expression                                                        @typescript-eslint/restrict-template-expressions
+  222:65  warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator               @typescript-eslint/prefer-nullish-coalescing
+  235:65  warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator               @typescript-eslint/prefer-nullish-coalescing
+  302:70  warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator               @typescript-eslint/prefer-nullish-coalescing
+  425:46  warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator               @typescript-eslint/prefer-nullish-coalescing
+  457:46  warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator               @typescript-eslint/prefer-nullish-coalescing
+  481:30  warning  Invalid type "number" of template literal expression                                                                    @typescript-eslint/restrict-template-expressions
+  496:43  warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator               @typescript-eslint/prefer-nullish-coalescing
+  526:45  warning  Prefer using nullish coalescing operator (`??`) instead of a logical or (`||`), as it is a safer operator               @typescript-eslint/prefer-nullish-coalescing
+
+??? 49 problems (5 errors, 44 warnings)
+

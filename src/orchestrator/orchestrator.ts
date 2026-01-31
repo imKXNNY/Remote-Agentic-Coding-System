@@ -157,26 +157,61 @@ export async function handleMessage(
     console.log(`[Orchestrator] Streaming mode: ${mode}`);
 
     let fullAssistantResponse = '';
+    const options = {
+      model: conversation.model_id || undefined,
+      sandbox: codebase?.sandbox_mode || 'workspace-write',
+    };
+
+    const startTime = Date.now();
+    let firstTokenTime: number | null = null;
 
     if (mode === 'stream') {
       // Stream mode: Send each chunk immediately
-      for await (const msg of aiClient.sendQuery(
-        promptToSend,
-        cwd,
-        session.assistant_session_id || undefined,
-        attachments
-      )) {
-        if (msg.type === 'assistant' && msg.content) {
-          fullAssistantResponse += msg.content;
-          await platform.sendMessage(conversationId, msg.content);
-        } else if (msg.type === 'tool' && msg.toolName) {
-          // Format and send tool call notification
-          const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
-          await platform.sendMessage(conversationId, toolMessage);
-        } else if (msg.type === 'result' && msg.sessionId) {
-          // Save session ID for resume
-          await sessionDb.updateSession(session.id, msg.sessionId);
+      try {
+        for await (const msg of aiClient.sendQuery(
+          promptToSend,
+          cwd,
+          session.assistant_session_id || undefined,
+          attachments,
+          options
+        )) {
+          if (!firstTokenTime && msg.content) {
+            firstTokenTime = Date.now();
+          }
+
+          if (msg.type === 'assistant' && msg.content) {
+            fullAssistantResponse += msg.content;
+            await platform.sendMessage(conversationId, msg.content);
+          } else if (msg.type === 'tool' && msg.toolName) {
+            // Format and send tool call notification
+            const toolMessage = formatToolCall(msg.toolName, msg.toolInput);
+            await platform.sendMessage(conversationId, toolMessage);
+          } else if (msg.type === 'result' && msg.sessionId) {
+            // Save session ID for resume
+            await sessionDb.updateSession(session.id, msg.sessionId);
+          }
         }
+
+        // Log Telemetry (Success)
+        await import('../utils/telemetry').then(m => m.logTelemetry({
+          conversation_id: conversation.id,
+          assistant_type: conversation.ai_assistant_type,
+          model_id: conversation.model_id || undefined,
+          latency_to_first_token_ms: firstTokenTime ? firstTokenTime - startTime : undefined,
+          latency_total_ms: Date.now() - startTime,
+          status: 'success'
+        }));
+      } catch (error) {
+         // Log Telemetry (Error)
+         await import('../utils/telemetry').then(m => m.logTelemetry({
+           conversation_id: conversation.id,
+           assistant_type: conversation.ai_assistant_type,
+           model_id: conversation.model_id || undefined,
+           latency_total_ms: Date.now() - startTime,
+           status: 'error',
+           error_message: (error as Error).message
+         }));
+         throw error;
       }
     } else {
       // Batch mode: Accumulate all chunks for logging, send only final clean summary
@@ -186,7 +221,9 @@ export async function handleMessage(
       for await (const msg of aiClient.sendQuery(
         promptToSend,
         cwd,
-        session.assistant_session_id || undefined
+        session.assistant_session_id || undefined,
+        undefined,
+        options
       )) {
         if (msg.type === 'assistant' && msg.content) {
           assistantMessages.push(msg.content);

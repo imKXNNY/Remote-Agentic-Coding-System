@@ -46,12 +46,19 @@ export class CodexClient implements IAssistantClient {
    * @param resumeSessionId - Optional thread ID to resume
    * @param attachments - Optional list of file paths to attach
    */
-  async *sendQuery(
+   async *sendQuery(
     prompt: string,
     cwd: string,
     resumeSessionId?: string,
-    attachments?: string[]
+    attachments?: string[],
+    options?: { model?: string; sandbox?: string; outputFormat?: 'text' | 'json' }
   ): AsyncGenerator<MessageChunk> {
+    // Check for JSON output mode
+    if (options?.outputFormat === 'json') {
+      yield* this.runJsonExec(prompt, cwd, attachments, options.model);
+      return;
+    }
+
     // Check for attachments - use CLI fallback if present
     if (attachments && attachments.length > 0) {
       yield* this.runWithCli(prompt, cwd, attachments, resumeSessionId);
@@ -60,31 +67,32 @@ export class CodexClient implements IAssistantClient {
 
     const codex = await getCodex();
 
-    // Get or create thread (synchronous operations!)
+    // Get or create thread
     let thread;
     if (resumeSessionId) {
       console.log(`[Codex] Resuming thread: ${resumeSessionId}`);
       try {
-        // NOTE: resumeThread is synchronous, not async
-        // IMPORTANT: Must pass options when resuming!
         thread = codex.resumeThread(resumeSessionId, {
           workingDirectory: cwd,
           skipGitRepoCheck: true,
+          model: options?.model,
         });
       } catch (error) {
         console.error(`[Codex] Failed to resume thread ${resumeSessionId}, creating new one:`, error);
-        // Fall back to creating new thread
         thread = codex.startThread({
           workingDirectory: cwd,
           skipGitRepoCheck: true,
+          model: options?.model,
+          sandboxMode: options?.sandbox as 'read-only' | 'workspace-write' | 'danger-full-access',
         });
       }
     } else {
-      console.log(`[Codex] Starting new thread in ${cwd}`);
-      // NOTE: startThread is synchronous, not async
+      console.log(`[Codex] Starting new thread in ${cwd} (Model: ${options?.model || 'default'}, Sandbox: ${options?.sandbox || 'default'})`);
       thread = codex.startThread({
         workingDirectory: cwd,
         skipGitRepoCheck: true,
+        model: options?.model,
+        sandboxMode: options?.sandbox as 'read-only' | 'workspace-write' | 'danger-full-access',
       });
     }
 
@@ -157,6 +165,74 @@ export class CodexClient implements IAssistantClient {
     } catch (error) {
       console.error('[Codex] Query error:', error);
       throw new Error(`Codex query failed: ${(error as Error).message}`);
+    }
+  }
+
+  /**
+   * Run Codex CLI with --json for automated tasks
+   */
+  private async *runJsonExec(
+    prompt: string,
+    cwd: string,
+    attachments: string[] = [],
+    model?: string
+  ): AsyncGenerator<MessageChunk> {
+    const { spawn } = await import('child_process');
+    
+    console.log('[Codex] Running CLI in JSON mode');
+    
+    const args = ['exec', prompt, '--json'];
+    if (model) args.push('--model', model);
+    for (const att of attachments) {
+      args.push('-i', att);
+    }
+
+    const child = spawn('codex', args, {
+      cwd,
+      env: { ...process.env, FORCE_COLOR: '0' }
+    });
+
+    let buffer = '';
+    
+    // Process JSONL line by line
+    if (child.stdout) {
+      for await (const chunk of child.stdout as unknown as AsyncIterable<Buffer>) {
+        buffer += chunk.toString();
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+  
+        for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const data = JSON.parse(line) as {
+            type: string;
+            text?: string;
+            name?: string;
+            command?: string;
+            input?: Record<string, unknown>;
+          };
+          // Map JSON events to MessageChunks
+          if (data.type === 'assistant_message' && data.text) {
+             yield { type: 'assistant', content: data.text };
+          } else if (data.type === 'tool_use' || data.type === 'command_execution') {
+             yield { type: 'tool', toolName: data.name || data.command, toolInput: data.input };
+          } else if (data.type === 'reasoning' && data.text) {
+             yield { type: 'thinking', content: data.text };
+          }
+        } catch (_e) {
+          // If not valid JSON, maybe it's just raw output
+          yield { type: 'assistant', content: line };
+        }
+      }
+    }
+  }
+
+    const code = await new Promise<number>((resolve) => {
+      child.on('close', resolve);
+    });
+
+    if (code !== 0) {
+      yield { type: 'system', content: '⚠️ Codex JSON execution failed.' };
     }
   }
 
