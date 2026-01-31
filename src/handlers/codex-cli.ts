@@ -39,17 +39,17 @@ export async function runCodexReview(options: CodexReviewOptions): Promise<strin
     let output = '';
     let errorOutput = '';
 
-    child.stdout.on('data', (data) => {
+    child.stdout.on('data', (data: Buffer) => {
       output += data.toString();
     });
 
-    child.stderr.on('data', (data) => {
+    child.stderr.on('data', (data: Buffer) => {
       errorOutput += data.toString();
       // Optional: Stream stderr to console for debugging
       console.error(`[Codex CLI stderr]: ${data}`);
     });
 
-    child.on('close', (code) => {
+    child.on('close', (code: number | null) => {
       if (code !== 0) {
         reject(new Error(`Codex review failed with code ${code}: ${errorOutput}`));
       } else {
@@ -57,7 +57,7 @@ export async function runCodexReview(options: CodexReviewOptions): Promise<strin
       }
     });
 
-    child.on('error', (err) => {
+    child.on('error', (err: Error) => {
       reject(err);
     });
   });

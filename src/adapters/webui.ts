@@ -7,6 +7,13 @@ interface WebUIEvent {
   payload: unknown;
 }
 
+interface WebUIIncomingMessage {
+  type: string;
+  conversationId?: string;
+  content?: string;
+  attachments?: string[];
+}
+
 export class WebUIAdapter implements IPlatformAdapter {
   private clients = new Map<string, Set<WebSocket>>();
   private messageHandler: ((conversationId: string, content: string, attachments?: string[]) => void) | null = null;
@@ -17,21 +24,23 @@ export class WebUIAdapter implements IPlatformAdapter {
 
 
 
-  onMessage(handler: (conversationId: string, content: string, attachments?: string[]) => void) {
+  onMessage(handler: (conversationId: string, content: string, attachments?: string[]) => void): void {
     this.messageHandler = handler;
   }
 
   handleConnection(ws: WebSocket, _req: IncomingMessage): void {
     console.log('[WebUI] New connection attempt');
     
-    ws.on('message', async (data) => {
+    ws.on('message', async (data: Buffer) => {
       try {
-        const event = JSON.parse(data.toString());
+        const event = JSON.parse(data.toString()) as WebUIIncomingMessage;
         
         if (event.type === 'join') {
           const conversationId = event.conversationId;
-          this.addClient(conversationId, ws);
-          console.log(`[WebUI] Client joined conversation ${conversationId}`);
+          if (conversationId) {
+            this.addClient(conversationId, ws);
+            console.log(`[WebUI] Client joined conversation ${conversationId}`);
+          }
         } else if (event.type === 'message') {
            if (this.messageHandler && event.conversationId && event.content) {
              const attachments = Array.isArray(event.attachments) ? event.attachments : [];
@@ -48,14 +57,14 @@ export class WebUIAdapter implements IPlatformAdapter {
     });
   }
 
-  private addClient(conversationId: string, ws: WebSocket) {
+  private addClient(conversationId: string, ws: WebSocket): void {
     if (!this.clients.has(conversationId)) {
       this.clients.set(conversationId, new Set());
     }
     this.clients.get(conversationId)?.add(ws);
   }
 
-  private removeClient(ws: WebSocket) {
+  private removeClient(ws: WebSocket): void {
     for (const [id, clientSet] of this.clients.entries()) {
       if (clientSet.delete(ws)) {
         console.log(`[WebUI] Client disconnected from ${id}`);

@@ -177,7 +177,11 @@ Session:
       // Look for a matching codebase (direct match or parent directory)
       const codebase = await codebaseDb.findBestCodebaseForPath(newCwd);
       
-      const updates: any = { cwd: newCwd };
+      const updates: {
+        cwd: string;
+        codebase_id?: string | null;
+        ai_assistant_type?: string;
+      } = { cwd: newCwd };
       if (codebase) {
         updates.codebase_id = codebase.id;
         updates.ai_assistant_type = codebase.ai_assistant_type;

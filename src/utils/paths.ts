@@ -21,7 +21,7 @@ export async function getWorkspaceRoot(): Promise<string> {
       cachedWorkspaceRoot = dockerPath;
       return dockerPath;
     }
-  } catch (e) {
+  } catch {
     // Ignore and fall back
   }
 

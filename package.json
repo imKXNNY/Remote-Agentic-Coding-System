@@ -10,6 +10,7 @@
     "setup-auth": "node dist/scripts/setup-auth.js",
     "test": "jest",
     "test:watch": "jest --watch",
+    "test:ci": "npm run type-check && npm run lint && npm run test",
     "type-check": "tsc --noEmit",
     "lint": "eslint . --cache",
     "lint:fix": "eslint . --cache --fix",

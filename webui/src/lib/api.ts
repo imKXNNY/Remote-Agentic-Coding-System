@@ -11,7 +11,7 @@ export class API {
     return !!this.credentials;
   }
 
-  static getAuthHeader() {
+  static getAuthHeader(): Record<string, string> {
     return this.credentials ? { 'Authorization': `Basic ${this.credentials}` } : {};
   }
 

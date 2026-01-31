@@ -50,6 +50,14 @@ interface WebhookEvent {
   sender: { login: string };
 }
 
+interface TriageResult {
+  severity: string;
+  component: string;
+  estimated_effort: string;
+  suggested_labels: string[];
+  technical_summary: string;
+}
+
 export class GitHubAdapter implements IPlatformAdapter {
   private octokit: Octokit;
   private webhookSecret: string;
@@ -401,7 +409,7 @@ Provide technical assessment including severity, component, and estimated effort
       );
 
       // Parse JSON output
-      const triage = JSON.parse(stdout);
+      const triage = JSON.parse(stdout) as TriageResult;
       
       // Format as markdown block
       return `

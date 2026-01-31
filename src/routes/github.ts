@@ -51,8 +51,9 @@ router.get('/github/issues', async (req, res) => {
     const onlyIssues = issues.filter(i => !i.is_pull_request);
 
     return res.json(onlyIssues);
-  } catch (error: any) {
-    console.error('[API] Failed to fetch GitHub issues:', error.message);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[API] Failed to fetch GitHub issues:', message);
     return res.status(500).json({ error: 'Failed to fetch issues from GitHub' });
   }
 });

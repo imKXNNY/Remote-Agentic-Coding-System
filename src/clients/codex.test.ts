@@ -1,23 +1,85 @@
-/**
- * Placeholder tests for Codex client
- * Full integration tests require real API credentials and are run manually
- */
+import { CodexClient } from './codex';
+import { EventEmitter } from 'events';
+
+// Mock child_process
+const mockSpawn = jest.fn();
+jest.mock('child_process', () => ({
+  spawn: mockSpawn
+}));
 
 describe('CodexClient', () => {
-  test('placeholder - integration tests require real Codex SDK and API', () => {
-    // Integration tests for Codex client require:
-    // 1. Valid CODEX_ID_TOKEN, CODEX_ACCESS_TOKEN, CODEX_REFRESH_TOKEN, CODEX_ACCOUNT_ID
-    // 2. Working directory with code
-    // 3. Manual verification of streaming behavior and turn.completed handling
-    //
-    // Run manual integration tests with:
-    // npm run dev (start the bot and test via Telegram with a Codex-configured codebase)
-    expect(true).toBe(true);
+  let client: CodexClient;
+  let mockChildProcess: any;
+
+  beforeEach(() => {
+    jest.clearAllMocks();
+    client = new CodexClient();
+
+    // Setup mock child process
+    mockChildProcess = new EventEmitter();
+    mockChildProcess.stdout = new EventEmitter();
+    mockChildProcess.stderr = new EventEmitter();
+    
+    // Default success behavior
+    mockSpawn.mockReturnValue(mockChildProcess);
   });
 
-  // TODO: Add comprehensive tests with mocked SDK
-  // - Thread creation and resumption
-  // - Event mapping (item.completed → MessageChunk)
-  // - turn.completed handling (critical break statement)
-  // - Error scenarios (thread resume failure, stream errors)
+  describe('Image Input Support (CLI Fallback)', () => {
+    it('uses CLI when attachments are present', async () => {
+      const generator = client.sendQuery('analyze this', '/tmp', undefined, ['image.png']);
+      
+      // Start generator - execution stops at `await import`
+      const nextPromise = generator.next();
+      
+      // Wait for dynamic import to resolve and code to proceed to spawn
+      await new Promise(resolve => setTimeout(resolve, 0));
+      
+      // verify spawn
+      expect(mockSpawn).toHaveBeenCalledWith(
+        'codex',
+        ['exec', 'analyze this', '-i', 'image.png'],
+        expect.objectContaining({ cwd: '/tmp' })
+      );
+
+      // Simulate output
+      mockChildProcess.stdout.emit('data', 'Analysis result');
+      
+      // Simulate exit
+      setTimeout(() => mockChildProcess.emit('close', 0), 10);
+
+      const result = await nextPromise;
+      expect(result.value).toEqual({ type: 'assistant', content: 'Analysis result' });
+    });
+
+    it('handles multiple attachments', async () => {
+      const generator = client.sendQuery('prompt', '/cwd', undefined, ['a.png', 'b.png']);
+      const nextPromise = generator.next();
+      
+      // Wait for execution to reach spawn
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      // Simulate simple exit
+      setTimeout(() => mockChildProcess.emit('close', 0), 10);
+      
+      const result = await nextPromise;
+      expect(result.value).toBeDefined();
+    });
+
+    it('handles CLI failure', async () => {
+      const generator = client.sendQuery('prompt', '/cwd', undefined, ['bad.png']);
+      const nextPromise = generator.next();
+      
+      await new Promise(resolve => setTimeout(resolve, 0));
+
+      // Simulate failure
+      mockChildProcess.stderr.emit('data', 'File not found');
+      mockChildProcess.emit('close', 1);
+
+      const result = await nextPromise;
+      expect(result.value).toEqual({
+        type: 'system',
+        content: '⚠️ Codex CLI failed: File not found'
+      });
+    });
+  });
 });

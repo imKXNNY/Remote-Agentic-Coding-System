@@ -192,15 +192,15 @@ export class CodexClient implements IAssistantClient {
     let stdout = '';
     let stderr = '';
 
-    child.stdout.on('data', (data) => {
+    child.stdout.on('data', (data: Buffer) => {
       const text = data.toString();
       stdout += text;
       // We could try to stream yield here if possible, but CLI might buffer
     });
 
-    child.stderr.on('data', (data) => {
+    child.stderr.on('data', (data: Buffer) => {
       stderr += data.toString();
-      console.error(`[Codex CLI stderr]: ${data}`);
+      console.error(`[Codex CLI stderr]: ${data.toString()}`);
     });
 
     // Wait for completion

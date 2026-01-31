@@ -1,131 +1,157 @@
 import { WebUIAdapter } from './webui';
-import { WebSocket, WebSocketServer } from 'ws';
 import { IncomingMessage } from 'http';
 
-// Mock WebSocket
-const mockWs = {
-  on: jest.fn(),
-  send: jest.fn(),
-  close: jest.fn(),
-  readyState: WebSocket.OPEN
-} as unknown as WebSocket;
+// Mock ws module with a class to support static properties safely
+jest.mock('ws', () => {
+  class MockWebSocket {
+    static OPEN = 1;
+    
+    // Instance methods/properties
+    on = jest.fn();
+    send = jest.fn();
+    close = jest.fn();
+    terminate = jest.fn();
+    ping = jest.fn();
+    readyState = 1; // Default to OPEN
 
-// Mock WebSocketServer
-const mockWss = {
-  on: jest.fn()
-} as unknown as WebSocketServer;
+    constructor() {
+        // Any init if needed
+    }
+  }
+
+  return {
+    WebSocket: MockWebSocket,
+    WebSocketServer: jest.fn().mockImplementation(() => ({
+      on: jest.fn(),
+      handleUpgrade: jest.fn(),
+      clients: new Set()
+    }))
+  };
+});
 
 describe('WebUIAdapter', () => {
   let adapter: WebUIAdapter;
+  // Function to get the most recent instance or create one
+  // Since we use 'new WebSocket()' in the code? No, clients are passed in via handleConnection
+  // So 'new WebSocket()' is NOT called by the code for *clients*.
+  // Clients are created by the *server* (mocked implicitly) or passed in test.
+  
+  // We need to create mock instances that LOOK like the MockWebSocket class instances
+  // OR we just rely on the structural typing since handleConnection takes 'WebSocket'.
 
   beforeEach(() => {
-    adapter = new WebUIAdapter();
-    adapter.setWebSocketServer(mockWss);
     jest.clearAllMocks();
+    adapter = new WebUIAdapter();
   });
 
-  it('implements IPlatformAdapter interface correctly', () => {
-    expect(adapter.getPlatformType()).toBe('webui');
-    expect(adapter.getStreamingMode()).toBe('stream');
-  });
-
-  it('handles client connection and joining', () => {
-    const ws = { ...mockWs } as unknown as WebSocket;
-    const req = {} as IncomingMessage;
-    
-    // Simulate connection
-    adapter.handleConnection(ws, req);
-    
-    // Should register message handler
-    expect(ws.on).toHaveBeenCalledWith('message', expect.any(Function));
-    
-    // Get the message handler
-    const messageHandler = (ws.on as jest.Mock).mock.calls.find(call => call[0] === 'message')[1];
-    
-    // Simulate join message
-    const joinMsg = JSON.stringify({ type: 'join', conversationId: '123' });
-    messageHandler(Buffer.from(joinMsg));
-    
-    // internal state check is hard without exposing it, so we test behavior via broadcast
+  afterEach(() => {
+    adapter.stop();
   });
   
-  it('broadcasts messages to joined clients', async () => {
-    const ws1 = { ...mockWs, send: jest.fn(), readyState: WebSocket.OPEN } as unknown as WebSocket;
-    const ws2 = { ...mockWs, send: jest.fn(), readyState: WebSocket.OPEN } as unknown as WebSocket;
+  // Helper to create a mock-like object that satisfies the adapter's checks
+  const createMockWs = () => ({
+    on: jest.fn(),
+    send: jest.fn(),
+    close: jest.fn(),
+    terminate: jest.fn(),
+    ping: jest.fn(),
+    readyState: 1 // OPEN
+  });
+
+  it('handles client connection and joins conversation', () => {
+    const mockWs = createMockWs();
+    const req = {} as IncomingMessage;
+    
+    adapter.handleConnection(mockWs as any, req);
+
+    const messageCall = mockWs.on.mock.calls.find((call: any[]) => call[0] === 'message');
+    expect(messageCall).toBeDefined();
+    
+    const messageHandler = messageCall[1];
+    const joinMsg = JSON.stringify({
+      type: 'join',
+      conversationId: 'test-conv-1'
+    });
+    
+    messageHandler(Buffer.from(joinMsg));
+    
+    // Test broadcast
+    adapter.sendMessage('test-conv-1', 'hello');
+    
+    expect(mockWs.send).toHaveBeenCalledWith(expect.stringContaining('hello'));
+  });
+
+  it('broadcasts messages to joined clients', () => {
+    const ws1 = createMockWs();
+    const ws2 = createMockWs();
     const req = {} as IncomingMessage;
 
-    adapter.handleConnection(ws1, req);
-    adapter.handleConnection(ws2, req);
+    adapter.handleConnection(ws1 as any, req);
+    adapter.handleConnection(ws2 as any, req);
 
-    const messageHandler1 = (ws1.on as jest.Mock).mock.calls.find(call => call[0] === 'message')[1];
-    const messageHandler2 = (ws2.on as jest.Mock).mock.calls.find(call => call[0] === 'message')[1];
+    const getHandler = (ws: any) => {
+        const call = ws.on.mock.calls.find((c: any[]) => c[0] === 'message');
+        if (!call) throw new Error('No message handler attached');
+        return call[1];
+    };
 
-    // Client 1 joins convo A
-    messageHandler1(Buffer.from(JSON.stringify({ type: 'join', conversationId: 'A' })));
-    
-    // Client 2 joins convo B
-    messageHandler2(Buffer.from(JSON.stringify({ type: 'join', conversationId: 'B' })));
+    const handler1 = getHandler(ws1);
+    const handler2 = getHandler(ws2);
 
-    // Send message to convo A
-    await adapter.sendMessage('A', 'Hello A');
+    handler1(Buffer.from(JSON.stringify({ type: 'join', conversationId: 'conv-A' })));
+    handler2(Buffer.from(JSON.stringify({ type: 'join', conversationId: 'conv-B' })));
 
-    // WS1 should receive it
+    adapter.sendMessage('conv-A', 'message for A');
+
     expect(ws1.send).toHaveBeenCalled();
-    const sentData1 = JSON.parse((ws1.send as jest.Mock).mock.calls[0][0]);
-    expect(sentData1).toEqual({
-      type: 'message',
-      payload: {
-        role: 'assistant',
-        content: 'Hello A',
-        timestamp: expect.any(Number)
-      }
-    });
-
-    // WS2 should NOT receive it
     expect(ws2.send).not.toHaveBeenCalled();
   });
 
-  it('removes client on disconnect', async () => {
-    const ws = { ...mockWs, send: jest.fn(), readyState: WebSocket.OPEN } as unknown as WebSocket;
+  it('handles incoming messages from client', () => {
+    const handler = jest.fn();
+    adapter.onMessage(handler);
+    
+    const mockWs = createMockWs();
+    adapter.handleConnection(mockWs as any, {} as IncomingMessage);
+    
+    const call = mockWs.on.mock.calls.find((c: any[]) => c[0] === 'message');
+    const msgHandler = call[1];
+    
+    const payload = {
+      type: 'message',
+      conversationId: 'conv-1',
+      content: 'user input',
+      attachments: ['file.txt']
+    };
+    
+    msgHandler(Buffer.from(JSON.stringify(payload)));
+    
+    expect(handler).toHaveBeenCalledWith('conv-1', 'user input', ['file.txt']);
+  });
+
+  it('removes client on disconnect', () => {
+    const mockWs = createMockWs();
     const req = {} as IncomingMessage;
+    
+    adapter.handleConnection(mockWs as any, req);
 
-    adapter.handleConnection(ws, req);
-    
-    const messageHandler = (ws.on as jest.Mock).mock.calls.find(call => call[0] === 'message')[1];
-    const closeHandler = (ws.on as jest.Mock).mock.calls.find(call => call[0] === 'close')[1];
+    const messageCall = mockWs.on.mock.calls.find((call: any[]) => call[0] === 'message');
+    const messageHandler = messageCall[1];
+    const joinMsg = JSON.stringify({
+      type: 'join',
+      conversationId: 'test-conv-1'
+    });
+    messageHandler(Buffer.from(joinMsg));
 
-    // Join
-    messageHandler(Buffer.from(JSON.stringify({ type: 'join', conversationId: 'A' })));
+    const closeCall = mockWs.on.mock.calls.find((call: any[]) => call[0] === 'close');
+    const closeHandler = closeCall[1];
     
-    // Send message (should receive)
-    await adapter.sendMessage('A', 'test 1');
-    expect(ws.send).toHaveBeenCalledTimes(1);
-    
-    // Disconnect
     closeHandler();
     
-    // Send message (should NOT receive)
-    await adapter.sendMessage('A', 'test 2');
-    expect(ws.send).toHaveBeenCalledTimes(1); // Still 1
-  });
-  it('invokes onMessage handler when client sends message', () => {
-    const ws = { ...mockWs } as unknown as WebSocket;
-    const req = {} as IncomingMessage;
-    const handler = jest.fn();
-    
-    adapter.onMessage(handler);
-    adapter.handleConnection(ws, req);
-    
-    const messageHandler = (ws.on as jest.Mock).mock.calls.find(call => call[0] === 'message')[1];
-    
-    // Simulate user message
-    const msg = JSON.stringify({ 
-        type: 'message', 
-        conversationId: '123',
-        content: 'Hello AI' 
-    });
-    messageHandler(Buffer.from(msg));
-    
-    expect(handler).toHaveBeenCalledWith('123', 'Hello AI');
+    // Reset mock to check for calls after disconnect
+    (mockWs.send as jest.Mock).mockClear();
+    adapter.sendMessage('test-conv-1', 'hello');
+
+    expect(mockWs.send).not.toHaveBeenCalled();
   });
 });

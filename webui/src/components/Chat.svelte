@@ -34,6 +34,32 @@
   $: selectedConversation = conversationList.find(c => c.id === conversationId);
   $: selectedCodebaseId = selectedConversation?.codebase_id || null;
 
+  // Search/Filter logic
+  let showSearch = false;
+  let searchTerm = '';
+
+  $: filteredConversations = conversationList
+    .filter(c => {
+      const term = searchTerm.toLowerCase();
+      return (
+        c.platform.toLowerCase().includes(term) ||
+        (c.project_name && c.project_name.toLowerCase().includes(term))
+      );
+    })
+    .sort((a, b) => new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime());
+
+  function handleSelect(id: string) {
+    conversationId = id;
+    handleJoin();
+    showSearch = false;
+  }
+
+  function handleSelectNew() {
+    conversationId = 'default-' + Date.now();
+    handleJoin();
+    showSearch = false;
+  }
+
   $: liveMessages = $messages.filter(
     m =>
       m.type === 'message' &&
@@ -164,23 +190,50 @@
 <div class="chat-container">
   <div class="chat-header">
     <div class="conversation-select">
-      <select bind:value={conversationId} on:change={handleJoin}>
-        {#each Object.entries(groupedConversations) as [project, conversations]}
-          <optgroup label={project}>
-            {#each conversations as conv}
-              <option value={conv.id}
-                >{conv.platform} (Last active: {new Date(conv.updated_at).toLocaleTimeString([], {
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })})</option
-              >
+      {#if !showSearch}
+        <button class="select-trigger" on:click={() => (showSearch = true)} type="button">
+          <span class="trigger-label">
+            {selectedConversation
+              ? `${selectedConversation.platform} (${selectedConversation.project_name || 'Individual'})`
+              : 'Select Session...'}
+          </span>
+          <svg viewBox="0 0 24 24" width="14" height="14"
+            ><path fill="currentColor" d="M7 10l5 5 5-5z" /></svg
+          >
+        </button>
+      {:else}
+        <div class="search-dropdown glass">
+          <input
+            type="text"
+            bind:value={searchTerm}
+            placeholder="Search sessions..."
+            autoFocus
+            on:blur={() => setTimeout(() => (showSearch = false), 200)}
+          />
+          <div class="search-results">
+            <button
+              class="result-item new"
+              on:click={() => {
+                handleSelectNew();
+              }}
+            >
+              <span>+ New Session</span>
+            </button>
+            {#each filteredConversations as conv}
+              <button class="result-item" on:click={() => handleSelect(conv.id)}>
+                <span class="conv-platform">{conv.platform}</span>
+                <span class="conv-Project">{conv.project_name || 'Individual'}</span>
+                <span class="conv-time"
+                  >{new Date(conv.updated_at).toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}</span
+                >
+              </button>
             {/each}
-          </optgroup>
-        {/each}
-        {#if conversationList.length === 0}
-          <option value={conversationId}>New Session</option>
-        {/if}
-      </select>
+          </div>
+        </div>
+      {/if}
     </div>
     <div class="connection-status">
       <button
@@ -199,6 +252,17 @@
       <span class="status-text">{$status}</span>
     </div>
   </div>
+
+  {#if $status !== 'connected'}
+    <div class="connection-banner {$status}">
+      {#if $status === 'connecting'}
+        <span>🔄 Reconnecting to server...</span>
+      {:else}
+        <span>⚠️ Disconnected. Connection lost.</span>
+        <button on:click={connect}>Reconnect</button>
+      {/if}
+    </div>
+  {/if}
 
   <div class="chat-main">
     <div class="chat-viewport">
@@ -305,15 +369,108 @@
     background: var(--bg-tertiary);
   }
 
-  select {
-    background: transparent;
-    color: var(--text-secondary);
+  .conversation-select {
+    position: relative;
+    min-width: 200px;
+  }
+
+  .select-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 10px;
+    background: rgba(255, 255, 255, 0.05);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
-    padding: 2px 4px;
-    font-size: 0.85rem;
-    outline: none;
     cursor: pointer;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    width: 100%;
+    text-align: left;
+    font-family: inherit;
+  }
+
+  .select-trigger:hover {
+    border-color: var(--accent-blue);
+    color: var(--text-primary);
+  }
+
+  .search-dropdown {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 300px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    z-index: 100;
+    padding: 4px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+
+  .search-dropdown input {
+    width: 100%;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid var(--border-subtle);
+    color: white;
+    padding: 6px;
+    border-radius: 4px;
+    margin-bottom: 4px;
+    outline: none;
+  }
+
+  .search-dropdown input:focus {
+    border-color: var(--accent-blue);
+  }
+
+  .search-results {
+    max-height: 300px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+
+  .result-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px;
+    background: transparent;
+    border: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    text-align: left;
+    border-radius: 4px;
+  }
+
+  .result-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+  }
+
+  .result-item.new {
+    color: var(--accent-green);
+    border-bottom: 1px solid var(--border-subtle);
+    margin-bottom: 2px;
+  }
+
+  .conv-platform {
+    font-weight: 500;
+    flex: 1;
+  }
+
+  .conv-Project {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.05);
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+
+  .conv-time {
+    font-size: 0.7rem;
+    color: var(--text-muted);
   }
 
   .connection-status {
@@ -573,5 +730,50 @@
 
   .input-wrapper {
     flex-wrap: wrap;
+  }
+
+  .connection-banner {
+    padding: 8px var(--gap-md);
+    font-size: 0.85rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    animation: slideDown 0.3s ease-out;
+  }
+
+  .connection-banner.connecting {
+    background: var(--accent-orange);
+    color: #1a1a1a;
+  }
+
+  .connection-banner.disconnected {
+    background: var(--error-red);
+    color: white;
+  }
+
+  .connection-banner button {
+    background: rgba(0, 0, 0, 0.2);
+    border: none;
+    padding: 2px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: inherit;
+    font-weight: 500;
+  }
+
+  .connection-banner button:hover {
+    background: rgba(0, 0, 0, 0.3);
+  }
+
+  @keyframes slideDown {
+    from {
+      transform: translateY(-100%);
+      opacity: 0;
+    }
+    to {
+      transform: translateY(0);
+      opacity: 1;
+    }
   }
 </style>

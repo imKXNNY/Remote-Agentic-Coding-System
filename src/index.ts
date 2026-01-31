@@ -9,7 +9,7 @@ dotenv.config();
 
 import express from 'express';
 import { createServer } from 'http';
-import { WebSocketServer } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 import { join } from 'path';
 import { readdir, stat, readFile } from 'fs/promises';
 import { TelegramAdapter } from './adapters/telegram';
@@ -22,6 +22,11 @@ import { handleMessage } from './orchestrator/orchestrator';
 import { pool } from './db/connection';
 import { ConversationLockManager } from './utils/conversation-lock';
 import { resolveWorkspacePath } from './utils/paths';
+
+// Extended WebSocket for heartbeat
+interface ExtWebSocket extends WebSocket {
+  isAlive: boolean;
+}
 
 async function main(): Promise<void> {
   console.log('[App] Starting Remote Coding Agent (Telegram + Claude MVP)');
@@ -90,7 +95,8 @@ async function main(): Promise<void> {
       try {
         const signature = req.headers['x-hub-signature-256'] as string;
         if (!signature) {
-          return res.status(400).json({ error: 'Missing signature header' });
+          res.status(400).json({ error: 'Missing signature header' });
+          return;
         }
 
         const payload = (req.body as Buffer).toString('utf-8');
@@ -100,10 +106,10 @@ async function main(): Promise<void> {
           console.error('[GitHub] Webhook processing error:', error);
         });
 
-        return res.status(200).send('OK');
+        res.status(200).send('OK');
       } catch (error) {
         console.error('[GitHub] Webhook endpoint error:', error);
-        return res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ error: 'Internal server error' });
       }
     });
     console.log('[Express] GitHub webhook endpoint registered');
@@ -143,7 +149,8 @@ async function main(): Promise<void> {
     try {
       const { conversationId, message } = req.body;
       if (!conversationId || !message) {
-        return res.status(400).json({ error: 'conversationId and message required' });
+        res.status(400).json({ error: 'conversationId and message required' });
+        return;
       }
 
       await testAdapter.receiveMessage(conversationId, message);
@@ -157,10 +164,10 @@ async function main(): Promise<void> {
           console.error('[Test] Message handling error:', error);
         });
 
-      return res.json({ success: true, conversationId, message });
+      res.json({ success: true, conversationId, message });
     } catch (error) {
       console.error('[Test] Endpoint error:', error);
-      return res.status(500).json({ error: 'Internal server error' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -177,66 +184,63 @@ async function main(): Promise<void> {
   // --- WebUI Integration ---
 
   // Basic Auth Middleware
-  const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
     const user = process.env.WEBUI_USER || 'admin';
     const pass = process.env.WEBUI_PASSWORD;
 
     if (!pass && process.env.NODE_ENV === 'production') {
       console.warn('[WebUI] WEBUI_PASSWORD not set in production');
-      return res.status(500).send('Server configuration error');
+      res.status(500).send('Server configuration error');
+      return;
     }
     
-    // In dev, if no password set, warn but allow (or maybe better to generate one?)
-    // For now we'll require it or fail, to be safe as per plan
+    // In dev, if no password set, warn but allow
     if (!pass) {
        console.warn('[WebUI] WEBUI_PASSWORD not set. WebUI disabled.');
-       return res.status(503).send('WebUI disabled');
+       res.status(503).send('WebUI disabled');
+       return;
     }
 
-    // SKIP authentication for WebSocket upgrades - it will be handled by the WS server manually
-    // via subprotocols, to avoid Express middleware blocking browser upgrade requests.
+    // SKIP authentication for WebSocket upgrades
     if (req.path.startsWith('/ws')) {
-      return next();
+      next();
+      return;
     }
 
-    const b64auth = (req.headers.authorization || '').split(' ')[1] || '';
+    const authHeader = req.headers.authorization || '';
+    const b64auth = authHeader.split(' ')[1] || '';
     if (!b64auth) {
       res.set('WWW-Authenticate', 'Basic realm="Remote Agent WebUI"');
-      return res.status(401).send('Authentication required.');
+      res.status(401).send('Authentication required.');
+      return;
     }
 
     const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
 
     if (login && password && login === user && password === pass) {
-      return next();
+      next();
+      return;
     }
 
     console.warn(`[WebUI] Auth failed for user: ${login}`);
     res.set('WWW-Authenticate', 'Basic realm="Remote Agent WebUI"');
-    return res.status(401).send('Authentication required.');
+    res.status(401).send('Authentication required.');
   };
 
   // Initialize WebUI Adapter
   const webui = new WebUIAdapter();
-  // We'll set the WSS later after creating it
 
   // Register Upload Route
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const uploadRouter = require('./routes/upload').default;
+  const uploadRouter = (await import('./routes/upload')).default;
   app.use('/api', authMiddleware, uploadRouter);
 
   // Register GitHub Route
-  // eslint-disable-next-line @typescript-eslint/no-var-requires
-  const githubRouter = require('./routes/github').default;
+  const githubRouter = (await import('./routes/github')).default;
   app.use('/api', authMiddleware, githubRouter);
 
   // API Routes (Protected)
   app.get('/api/conversations', authMiddleware, async (_req, res) => {
     try {
-      // Assuming we can get list from DB - referencing db module
-      // We might need to implement a list function in db/conversations
-      // For now, let's just query the pool directly to avoid changing db module signatures if possible
-      // or duplicate the logic here for MVP.
       const result = await pool.query(`
         SELECT 
           c.id, 
@@ -250,30 +254,30 @@ async function main(): Promise<void> {
         ORDER BY b.name NULLS LAST, c.updated_at DESC 
         LIMIT 50
       `);
-      return res.json(result.rows);
+      res.json(result.rows);
     } catch (error) {
        console.error('[WebUI] Failed to fetch conversations:', error);
-       return res.status(500).json({ error: 'Failed to fetch conversations' });
+       res.status(500).json({ error: 'Failed to fetch conversations' });
     }
   });
 
   app.get('/api/codebases', authMiddleware, async (_req, res) => {
     try {
       const result = await pool.query('SELECT * FROM remote_agent_codebases ORDER BY name ASC');
-      return res.json(result.rows);
+      res.json(result.rows);
     } catch (error) {
       console.error('[WebUI] Failed to fetch codebases:', error);
-      return res.status(500).json({ error: 'Failed to fetch codebases' });
+      res.status(500).json({ error: 'Failed to fetch codebases' });
     }
   });
 
   app.get('/api/conversations/:id/messages', authMiddleware, async (req, res) => {
     try {
       const messages = await messageDb.getMessages(req.params.id);
-      return res.json(messages);
+      res.json(messages);
     } catch (error) {
       console.error('[WebUI] Failed to fetch messages:', error);
-      return res.status(500).json({ error: 'Failed to fetch messages' });
+      res.status(500).json({ error: 'Failed to fetch messages' });
     }
   });
 
@@ -283,14 +287,15 @@ async function main(): Promise<void> {
       const codebaseId = convResult.rows[0]?.codebase_id;
       
       if (!codebaseId) {
-        return res.json({});
+        res.json({});
+        return;
       }
       
       const commands = await codebaseDb.getCodebaseCommands(codebaseId);
-      return res.json(commands);
+      res.json(commands);
     } catch (error) {
       console.error('[WebUI] Failed to fetch commands:', error);
-      return res.status(500).json({ error: 'Failed to fetch commands' });
+      res.status(500).json({ error: 'Failed to fetch commands' });
     }
   });
 
@@ -298,16 +303,17 @@ async function main(): Promise<void> {
     try {
       const relPath = (req.query.path as string) || '';
       
-      // Prevent directory traversal
       if (relPath.includes('..')) {
-        return res.status(400).json({ error: 'Invalid path' });
+        res.status(400).json({ error: 'Invalid path' });
+        return;
       }
 
       const fullPath = await resolveWorkspacePath(relPath);
       const statInfo = await stat(fullPath);
 
       if (!statInfo.isDirectory()) {
-         return res.status(400).json({ error: 'Not a directory' });
+         res.status(400).json({ error: 'Not a directory' });
+         return;
       }
 
       const files = await readdir(fullPath, { withFileTypes: true });
@@ -317,9 +323,9 @@ async function main(): Promise<void> {
         path: join(relPath, f.name).replace(/\\/g, '/')
       }));
 
-      return res.json(listing);
-    } catch (error) {
-      return res.status(500).json({ error: 'Failed to list files' });
+      res.json(listing);
+    } catch (_error) {
+      res.status(500).json({ error: 'Failed to list files' });
     }
   });
 
@@ -327,34 +333,33 @@ async function main(): Promise<void> {
     try {
        const relPath = (req.query.path as string) || '';
 
-       if (relPath.includes('..')) return res.status(400).json({ error: 'Invalid path' });
+       if (relPath.includes('..')) {
+         res.status(400).json({ error: 'Invalid path' });
+         return;
+       }
        
        const fullPath = await resolveWorkspacePath(relPath);
-       // Simple check if text file? Monaca handles many, let's just send content for MVP
-       // Maybe size limit
        const statInfo = await stat(fullPath);
-       if (statInfo.size > 1024 * 1024) { // 1MB limit
-          return res.status(400).json({ error: 'File too large' });
+       if (statInfo.size > 1024 * 1024) { 
+          res.status(400).json({ error: 'File too large' });
+          return;
        }
        
        const content = await readFile(fullPath, 'utf-8');
-       return res.json({ content });
-    } catch (error) {
-       return res.status(500).json({ error: 'Failed to read file' });
+       res.json({ content });
+    } catch (_error) {
+       res.status(500).json({ error: 'Failed to read file' });
     }
   });
 
   // Serve Frontend Static Files
-  // In production (Docker), these will be in ./webui/dist
-  // Protected by auth? If we protect the whole "/" it prompts auth on load.
   app.use(authMiddleware, express.static('webui/dist'));
   app.get('*', authMiddleware, (_req, res, next) => {
-      // Allow other API routes to pass
-      if (_req.path.startsWith('/api/') || _req.path.startsWith('/ws')) return next();
-      // Logic to resolve index.html
-      // We need to define where it is.
-      // If we are in dist/index.js, 'webui/dist' is relative to CWD.
-      return res.sendFile(join(process.cwd(), 'webui/dist/index.html'));
+      if (_req.path.startsWith('/api/') || _req.path.startsWith('/ws')) {
+        next();
+        return;
+      }
+      res.sendFile(join(process.cwd(), 'webui/dist/index.html'));
   });
 
   // WebSocket Server
@@ -363,7 +368,6 @@ async function main(): Promise<void> {
     path: '/ws'
   });
   
-  // Trace all upgrade requests
   server.on('upgrade', (req, _socket, _head) => {
     console.log(`[WebSocket] Upgrade requested for: ${req.url} from ${req.socket.remoteAddress}`);
   });
@@ -372,11 +376,9 @@ async function main(): Promise<void> {
   wss.on('connection', (ws, req) => {
      console.log('[WebSocket] Connection established. Verifying auth...');
      
-     // Check auth from: Header OR Protocol OR Query Param
      let b64auth = (req.headers.authorization || '').split(' ')[1] || '';
      
      if (!b64auth) {
-        // Parse from query param ?token=...
         try {
           const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
           b64auth = url.searchParams.get('token') || '';
@@ -387,9 +389,13 @@ async function main(): Promise<void> {
      }
 
      if (!b64auth && req.headers['sec-websocket-protocol']) {
-       const protocols = (req.headers['sec-websocket-protocol'] as string).split(',').map(p => p.trim());
-       if (protocols.length >= 2 && protocols[0] === 'authorization') {
-           b64auth = protocols[1];
+       const protocolHeader = req.headers['sec-websocket-protocol'] as string | string[] | undefined;
+       const header = Array.isArray(protocolHeader) ? protocolHeader[0] : protocolHeader;
+       if (typeof header === 'string') {
+         const protocols = header.split(',').map(p => p.trim());
+         if (protocols.length >= 2 && protocols[0] === 'authorization') {
+             b64auth = protocols[1];
+         }
        }
      }
      
@@ -418,31 +424,39 @@ async function main(): Promise<void> {
      console.log('[WebSocket] Authentication successful for user:', login);
      
      // Setup Heartbeat
-     (ws as any).isAlive = true;
-     ws.on('pong', () => { (ws as any).isAlive = true; });
+     (ws as unknown as ExtWebSocket).isAlive = true;
+     ws.on('pong', () => { (ws as unknown as ExtWebSocket).isAlive = true; });
 
      // Delegate to adapter
      webui.handleConnection(ws, req);
   });
 
   // WebSocket Heartbeat
-  const interval = setInterval(() => {
-    wss.clients.forEach((ws: any) => {
-      if (ws.isAlive === false) return ws.terminate();
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((client) => {
+      const extWs = client as unknown as ExtWebSocket;
+      if (!extWs.isAlive) {
+        extWs.terminate();
+        return;
+      }
       
-      ws.isAlive = false;
-      ws.ping();
+      extWs.isAlive = false;
+      extWs.ping();
     });
   }, 30000);
 
   wss.on('close', () => {
-    clearInterval(interval);
+    clearInterval(heartbeatInterval);
   });
   
   // Handle incoming messages from WebUI
   webui.onMessage((conversationId, content, attachments) => {
       lockManager.acquireLock(conversationId, async () => {
-          await handleMessage(webui, conversationId, content, undefined, attachments);
+          await handleMessage(webui, conversationId, content, undefined, attachments).catch(e => {
+            console.error('[WebUI] Message handling error:', e);
+          });
+      }).catch(e => {
+        console.error('[WebUI] Lock acquisition error:', e);
       });
   });
 
@@ -462,7 +476,6 @@ async function main(): Promise<void> {
     if (!message) return;
 
     // Send to Orchestrator
-    // Fire-and-forget: handler returns immediately, processing happens async
     lockManager
       .acquireLock(conversationId, async () => {
         await handleMessage(telegram, conversationId, message);
@@ -482,7 +495,7 @@ async function main(): Promise<void> {
     pool.end().then(() => {
       console.log('[Database] Connection pool closed');
       process.exit(0);
-    });
+    }).catch(_e => process.exit(1));
   };
 
   process.once('SIGINT', shutdown);
@@ -490,7 +503,7 @@ async function main(): Promise<void> {
 
   console.log('[App] Remote Coding Agent is ready!');
   console.log('[App] Send messages to your Telegram bot to get started');
-  console.log('[App] Test endpoint available: POST http://localhost:' + port + '/test/message');
+  console.log(`[App] Test endpoint available: POST http://localhost:${String(port)}/test/message`);
 }
 
 // Run the application
