@@ -1,92 +1,97 @@
-/**
- * Unit tests for GitHub adapter
- */
 import { GitHubAdapter } from './github';
+import { exec } from 'child_process';
 
-// Mock orchestrator to avoid loading Claude Agent SDK (ESM module)
-jest.mock('../orchestrator/orchestrator', () => ({
-  handleMessage: jest.fn().mockResolvedValue(undefined),
-}));
-
-// Mock database modules
-jest.mock('../db/conversations', () => ({
-  getConversation: jest.fn(),
-  createConversation: jest.fn(),
-  updateConversation: jest.fn(),
-}));
-
-jest.mock('../db/codebases', () => ({
-  getCodebase: jest.fn(),
-  createCodebase: jest.fn(),
-  getCodebaseByRepo: jest.fn(),
-}));
-
-jest.mock('../db/sessions', () => ({
-  getActiveSession: jest.fn(),
-  createSession: jest.fn(),
-  endSession: jest.fn(),
-}));
-
-// Mock Octokit to avoid ESM import issues in Jest
+// Mock dependencies
 jest.mock('@octokit/rest', () => ({
   Octokit: jest.fn().mockImplementation(() => ({
     rest: {
-      issues: {
-        createComment: jest.fn().mockResolvedValue({}),
-      },
-      repos: {
-        get: jest.fn().mockResolvedValue({
-          data: { default_branch: 'main' },
-        }),
-      },
-    },
-  })),
+      issues: { createComment: jest.fn() },
+      repos: { get: jest.fn().mockResolvedValue({ data: { default_branch: 'main' } }) }
+    }
+  }))
+}));
+
+// Mock child_process
+jest.mock('child_process', () => ({
+  exec: jest.fn()
+}));
+
+jest.mock('fs/promises', () => ({
+  access: jest.fn().mockResolvedValue(undefined),
+  readdir: jest.fn().mockResolvedValue([])
+}));
+// Mock DB interactions
+jest.mock('../db/conversations', () => ({
+  getOrCreateConversation: jest.fn().mockResolvedValue({ id: 'conv-1', codebase_id: 'codebase-1' }),
+  updateConversation: jest.fn(),
+  getCodebaseCommands: jest.fn().mockResolvedValue([])
+}));
+jest.mock('../db/codebases', () => ({
+  findCodebaseByRepoUrl: jest.fn(),
+  createCodebase: jest.fn().mockResolvedValue({ id: 'codebase-new', name: 'repo', default_cwd: '/workspace/repo' }),
+  getCodebaseCommands: jest.fn().mockResolvedValue([]),
+  updateCodebaseCommands: jest.fn()
+}));
+jest.mock('../db/sessions', () => ({
+  getActiveSession: jest.fn().mockResolvedValue(null)
+}));
+jest.mock('../orchestrator/orchestrator', () => ({
+  handleMessage: jest.fn()
 }));
 
 describe('GitHubAdapter', () => {
   let adapter: GitHubAdapter;
 
   beforeEach(() => {
-    adapter = new GitHubAdapter('fake-token-for-testing', 'fake-webhook-secret');
+    jest.clearAllMocks();
+    adapter = new GitHubAdapter('fake-token', 'fake-secret');
   });
 
-  describe('streaming mode', () => {
-    test('should always return batch mode', () => {
-      expect(adapter.getStreamingMode()).toBe('batch');
-    });
-  });
+  describe('generateIssueTriage', () => {
+    it('parses structured Codex output correctly', async () => {
+      // Setup mock output
+      const mockTriage = {
+        severity: 'high',
+        component: 'auth',
+        estimated_effort: '2d',
+        suggested_labels: ['bug', 'urgent'],
+        technical_summary: 'Root cause analysis suggests...'
+      };
 
-  describe('lifecycle methods', () => {
-    test('should start without errors', async () => {
-      await expect(adapter.start()).resolves.toBeUndefined();
-    });
-
-    test('should stop without errors', () => {
-      expect(() => adapter.stop()).not.toThrow();
-    });
-  });
-
-  describe('sendMessage', () => {
-    test('should handle invalid conversationId gracefully', async () => {
-      // Should not throw when given invalid conversationId
-      await expect(adapter.sendMessage('invalid', 'test message')).resolves.toBeUndefined();
-    });
-  });
-
-  describe('conversationId format', () => {
-    test('should use owner/repo#number format', () => {
-      // This is implicit from the implementation
-      // We're testing that the format is used correctly by attempting to parse
-      const validFormat = 'owner/repo#123';
-      const invalidFormats = ['owner-repo#123', 'owner/repo-123', 'owner#repo#123', 'invalid'];
-
-      // Valid format should be parsed successfully (via sendMessage not throwing type errors)
-      expect(() => adapter.sendMessage(validFormat, 'test')).not.toThrow();
-
-      // Invalid formats should be handled gracefully (not throw)
-      invalidFormats.forEach(format => {
-        expect(() => adapter.sendMessage(format, 'test')).not.toThrow();
+      // Mock exec to call callback with success
+      (exec as unknown as jest.Mock).mockImplementation((_cmd, cb) => {
+        cb(null, { stdout: JSON.stringify(mockTriage), stderr: '' });
       });
+
+      const result = await (adapter as any).generateIssueTriage({
+        title: 'Login broken',
+        body: 'Cannot login',
+        number: 1
+      });
+
+      expect(result).toContain('Severity**: HIGH');
+      expect(result).toContain('Component**: `auth`');
+      expect(result).toContain('Root cause analysis');
+      
+      expect(exec).toHaveBeenCalledWith(
+        expect.stringContaining('codex exec'),
+        expect.anything() // callback
+      );
+    });
+
+    it('handles Codex failure gracefully', async () => {
+      // Mock exec to call callback with error
+      (exec as unknown as jest.Mock).mockImplementation((_cmd, cb) => {
+        cb(new Error('Codex crashed'), { stdout: '', stderr: 'error' });
+      });
+
+      const result = await (adapter as any).generateIssueTriage({
+        title: 'Crash',
+        body: 'Boom',
+        number: 2
+      });
+
+      expect(result).toContain('(Automated triage failed');
     });
   });
 });

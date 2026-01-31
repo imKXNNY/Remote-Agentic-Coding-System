@@ -10,6 +10,7 @@ import { Conversation, CommandResult } from '../types';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
+import { runCodexReview } from './codex-cli';
 
 const execAsync = promisify(exec);
 
@@ -86,6 +87,12 @@ Command Management:
   /commands - List registered
   Note: Commands use relative paths (e.g., .claude/commands)
 
+Codex Integration:
+  /codex-review [branch|commit|uncommitted] [target] - Run native Codex review
+  /codex-exec <prompt> - Run automated task with JSON output mode
+  /codex-add-dir <path> - Add additional directory for Codex access
+  /codex-clear-dirs - Clear all additional directories
+
 Codebase:
   /clone <repo-url> - Clone repository
   /repos - List workspace repositories
@@ -96,8 +103,140 @@ Codebase:
 Session:
   /status - Show state
   /reset - Clear session
-  /help - Show help`,
+  /help - Show help
+  /setmodel <id> - Set assistant model (GPT-5, etc.)
+  /setsandbox <mode> - Set sandbox (read-only, workspace-write, danger-full-access)`,
       };
+
+    case 'setmodel': {
+      if (args.length === 0) {
+        return { success: false, message: 'Usage: /setmodel <model_id>' };
+      }
+      const modelId = args[0];
+      await db.updateConversation(conversation.id, { model_id: modelId });
+      return {
+        success: true,
+        message: `Assistant model for this conversation set to: ${modelId}`,
+        modified: true,
+      };
+    }
+
+    case 'setsandbox': {
+      if (args.length === 0) {
+        return { success: false, message: 'Usage: /setsandbox <read-only | workspace-write | danger-full-access>' };
+      }
+      if (!conversation.codebase_id) {
+        return { success: false, message: 'No codebase context. Use /clone or /setcwd first.' };
+      }
+      const mode = args[0] as 'read-only' | 'workspace-write' | 'danger-full-access';
+      if (!['read-only', 'workspace-write', 'danger-full-access'].includes(mode)) {
+        return { success: false, message: 'Invalid sandbox mode.' };
+      }
+      await codebaseDb.updateCodebaseSandboxMode(conversation.codebase_id, mode);
+      return {
+        success: true,
+        message: `Sandbox mode for codebase set to: ${mode}`,
+        modified: true,
+      };
+    }
+
+    case 'codex-add-dir': {
+      if (args.length === 0) {
+        return { success: false, message: 'Usage: /codex-add-dir <path>' };
+      }
+      const newDir = join('/workspace', args[0]);
+      try {
+        await access(newDir);
+        const currentDirs = conversation.additional_dirs || [];
+        if (currentDirs.includes(newDir)) {
+           return { success: true, message: `Directory already exists in list: ${newDir}` };
+        }
+        const updatedDirs = [...currentDirs, newDir];
+        await db.updateConversation(conversation.id, { additional_dirs: updatedDirs });
+        return {
+          success: true,
+          message: `Added additional directory: ${newDir}\n\nCodex now has access to:\n- ${conversation.cwd || '(main)'}\n${updatedDirs.map(d => `- ${d}`).join('\n')}`,
+          modified: true,
+        };
+      } catch (_error) {
+        return { success: false, message: `Failed to add directory: Does not exist or no access to ${newDir}` };
+      }
+    }
+
+    case 'codex-clear-dirs': {
+      await db.updateConversation(conversation.id, { additional_dirs: [] });
+      return {
+        success: true,
+        message: 'All additional directories cleared.',
+        modified: true,
+      };
+    }
+
+    case 'codex-exec': {
+      if (args.length === 0) {
+        return { success: false, message: 'Usage: /codex-exec <prompt>' };
+      }
+      if (!conversation.codebase_id) {
+        return { success: false, message: 'No codebase context. Use /clone or /setcwd first.' };
+      }
+      
+      const prompt = args.join(' ');
+      const { getAssistantClient } = await import('../clients/factory');
+      const aiClient = getAssistantClient('codex');
+      const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
+      const cwd = conversation.cwd || codebase?.default_cwd || '/workspace';
+      
+      try {
+        let output = '';
+        for await (const chunk of aiClient.sendQuery(prompt, cwd, undefined, undefined, { outputFormat: 'json' })) {
+          if (chunk.type === 'assistant' && chunk.content) {
+            output += chunk.content;
+          } else if (chunk.type === 'tool' ) {
+            output += `\n[Tool: ${chunk.toolName}]\n`;
+          }
+        }
+        return {
+          success: true,
+          message: `**Codex Exec (JSON Mode) Output:**\n\n${output || 'No output returned.'}`,
+        };
+      } catch (error) {
+        return { success: false, message: `Codex Exec Failed: ${(error as Error).message}` };
+      }
+    }
+
+    case 'codex-review': {
+      if (!conversation.cwd) {
+        return { success: false, message: 'No working directory set. Use /clone or /setcwd first.' };
+      }
+
+      const modeStr = args[0]?.toLowerCase();
+      const target = args[1];
+
+      let reviewMode: 'branch' | 'uncommitted' | 'commit' | undefined;
+
+      if (modeStr === 'branch') reviewMode = 'branch';
+      else if (modeStr === 'uncommitted') reviewMode = 'uncommitted';
+      else if (modeStr === 'commit') reviewMode = 'commit';
+      else if (modeStr) {
+         return { success: false, message: 'Usage: /codex-review [branch <name> | commit <sha> | uncommitted]' };
+      }
+
+      try {
+        const output = await runCodexReview({
+          workingDir: conversation.cwd,
+          target,
+          reviewMode,
+        });
+
+        return {
+          success: true,
+          message: `**Codex Review Results**\n\n${output}`,
+        };
+      } catch (error) {
+        const err = error as Error;
+        return { success: false, message: `Codex Review Failed: ${err.message}` };
+      }
+    }
 
     case 'status': {
       let msg = `Platform: ${conversation.platform_type}\nAI Assistant: ${conversation.ai_assistant_type}`;
@@ -115,6 +254,10 @@ Session:
       }
 
       msg += `\n\nCurrent Working Directory: ${conversation.cwd || 'Not set'}`;
+
+      if (conversation.additional_dirs && conversation.additional_dirs.length > 0) {
+        msg += `\nAdditional Directories:\n${conversation.additional_dirs.map(d => `- ${d}`).join('\n')}`;
+      }
 
       const session = await sessionDb.getActiveSession(conversation.id);
       if (session?.id) {
@@ -139,7 +282,11 @@ Session:
       // Look for a matching codebase (direct match or parent directory)
       const codebase = await codebaseDb.findBestCodebaseForPath(newCwd);
       
-      const updates: any = { cwd: newCwd };
+      const updates: {
+        cwd: string;
+        codebase_id?: string | null;
+        ai_assistant_type?: string;
+      } = { cwd: newCwd };
       if (codebase) {
         updates.codebase_id = codebase.id;
         updates.ai_assistant_type = codebase.ai_assistant_type;
@@ -272,7 +419,7 @@ Session:
 
         // Detect command folders
         let commandFolder: string | null = null;
-        for (const folder of ['.claude/commands', '.agents/commands']) {
+        for (const folder of ['.claude/commands', '.codex/commands', '.agents/commands']) {
           try {
             await access(join(targetPath, folder));
             commandFolder = folder;

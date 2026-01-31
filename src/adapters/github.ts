@@ -50,6 +50,14 @@ interface WebhookEvent {
   sender: { login: string };
 }
 
+interface TriageResult {
+  severity: string;
+  component: string;
+  estimated_effort: string;
+  suggested_labels: string[];
+  technical_summary: string;
+}
+
 export class GitHubAdapter implements IPlatformAdapter {
   private octokit: Octokit;
   private webhookSecret: string;
@@ -373,6 +381,54 @@ ${userComment}`;
   }
 
   /**
+   * Generate structured triage analysis using Codex
+   */
+  private async generateIssueTriage(issue: WebhookEvent['issue']): Promise<string> {
+    if (!issue) return '';
+
+    try {
+      // Schema path
+      const schemaPath = join(process.cwd(), 'src/schemas/issue-triage.json');
+      await access(schemaPath); // Verify schema exists
+
+      // Construct prompt
+      const prompt = `Analyze this GitHub issue for triage.
+Title: ${issue.title}
+Body: ${issue.body || 'No description provided.'}
+
+Provide technical assessment including severity, component, and estimated effort.`;
+
+      // Escape quotes for command line
+      const safePrompt = prompt.replace(/"/g, '\\"');
+      
+      console.log('[GitHub] Running Codex structured triage...');
+      
+      // Execute codex exec
+      const { stdout } = await execAsync(
+        `codex exec "${safePrompt}" --output-schema "${schemaPath}" --sandbox read-only`
+      );
+
+      // Parse JSON output
+      const triage = JSON.parse(stdout) as TriageResult;
+      
+      // Format as markdown block
+      return `
+### 🤖 Codex Triage Analysis
+- **Severity**: ${triage.severity.toUpperCase()}
+- **Component**: \`${triage.component}\`
+- **Effort**: ${triage.estimated_effort}
+- **Suggested Labels**: ${triage.suggested_labels.join(', ')}
+
+**Technical Summary**:
+${triage.technical_summary}
+`;
+    } catch (error) {
+      console.error('[GitHub] Triage generation failed:', error);
+      return '\n> (Automated triage failed to generate)\n';
+    }
+  }
+
+  /**
    * Handle incoming webhook event
    */
   async handleWebhook(
@@ -465,10 +521,15 @@ ${userComment}`;
           }
         }
       }
-    } else if (isNewConversation) {
+      } else if (isNewConversation) {
       // For non-command messages, add issue/PR context directly
       if (eventType === 'issue' && issue) {
+        const triageAnalysis = await this.generateIssueTriage(issue);
         finalMessage = this.buildIssueContext(issue, strippedComment);
+        
+        if (triageAnalysis) {
+          finalMessage += `\n\n---${triageAnalysis}`;
+        }
       } else if (eventType === 'issue_comment' && issue) {
         finalMessage = this.buildIssueContext(issue, strippedComment);
       } else if (eventType === 'pull_request' && pullRequest) {

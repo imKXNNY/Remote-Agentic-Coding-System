@@ -38,7 +38,18 @@ RUN npm ci
 # Copy application code
 COPY . .
 
-# Build TypeScript
+# Build WebUI
+# Sync shared types first
+RUN npm run sync:types
+# Build Svelte frontend
+WORKDIR /app/webui
+RUN npm install
+RUN npm run build
+# Cleanup frontend node_modules (static assets are in dist)
+RUN rm -rf node_modules
+WORKDIR /app
+
+# Build TypeScript Backend
 RUN npm run build
 
 # Remove devDependencies to reduce image size

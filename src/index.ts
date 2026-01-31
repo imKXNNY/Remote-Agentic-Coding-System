@@ -8,14 +8,36 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 import express from 'express';
+import { createServer } from 'http';
+import { WebSocket, WebSocketServer } from 'ws';
+import { join } from 'path';
+import { readdir, stat, readFile } from 'fs/promises';
 import { TelegramAdapter } from './adapters/telegram';
 import { TestAdapter } from './adapters/test';
 import { GitHubAdapter } from './adapters/github';
+import { WebUIAdapter } from './adapters/webui';
+import * as messageDb from './db/messages';
+import * as codebaseDb from './db/codebases';
 import { handleMessage } from './orchestrator/orchestrator';
 import { pool } from './db/connection';
 import { ConversationLockManager } from './utils/conversation-lock';
+import { resolveWorkspacePath } from './utils/paths';
+import { startMcpServer } from './mcp-server';
+
+// Extended WebSocket for heartbeat
+interface ExtWebSocket extends WebSocket {
+  isAlive: boolean;
+}
 
 async function main(): Promise<void> {
+  const isMcpMode = process.argv.includes('--mcp');
+  
+  if (isMcpMode) {
+    console.error('[App] Starting in MCP Mode');
+    await startMcpServer();
+    return;
+  }
+
   console.log('[App] Starting Remote Coding Agent (Telegram + Claude MVP)');
 
   // Validate required environment variables
@@ -70,8 +92,9 @@ async function main(): Promise<void> {
     console.log('[GitHub] Adapter not initialized (missing GITHUB_TOKEN or WEBHOOK_SECRET)');
   }
 
-  // Setup Express server
+  // Setup Express and HTTP server
   const app = express();
+  const server = createServer(app);
   const port = process.env.PORT || 3000;
 
   // GitHub webhook endpoint (must use raw body for signature verification)
@@ -81,7 +104,8 @@ async function main(): Promise<void> {
       try {
         const signature = req.headers['x-hub-signature-256'] as string;
         if (!signature) {
-          return res.status(400).json({ error: 'Missing signature header' });
+          res.status(400).json({ error: 'Missing signature header' });
+          return;
         }
 
         const payload = (req.body as Buffer).toString('utf-8');
@@ -91,10 +115,10 @@ async function main(): Promise<void> {
           console.error('[GitHub] Webhook processing error:', error);
         });
 
-        return res.status(200).send('OK');
+        res.status(200).send('OK');
       } catch (error) {
         console.error('[GitHub] Webhook endpoint error:', error);
-        return res.status(500).json({ error: 'Internal server error' });
+        res.status(500).json({ error: 'Internal server error' });
       }
     });
     console.log('[Express] GitHub webhook endpoint registered');
@@ -134,7 +158,8 @@ async function main(): Promise<void> {
     try {
       const { conversationId, message } = req.body;
       if (!conversationId || !message) {
-        return res.status(400).json({ error: 'conversationId and message required' });
+        res.status(400).json({ error: 'conversationId and message required' });
+        return;
       }
 
       await testAdapter.receiveMessage(conversationId, message);
@@ -148,10 +173,10 @@ async function main(): Promise<void> {
           console.error('[Test] Message handling error:', error);
         });
 
-      return res.json({ success: true, conversationId, message });
+      res.json({ success: true, conversationId, message });
     } catch (error) {
       console.error('[Test] Endpoint error:', error);
-      return res.status(500).json({ error: 'Internal server error' });
+      res.status(500).json({ error: 'Internal server error' });
     }
   });
 
@@ -165,8 +190,299 @@ async function main(): Promise<void> {
     res.json({ success: true });
   });
 
-  app.listen(port, () => {
-    console.log(`[Express] Health check server listening on port ${port}`);
+  // --- WebUI Integration ---
+
+  // Basic Auth Middleware
+  const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
+    const user = process.env.WEBUI_USER || 'admin';
+    const pass = process.env.WEBUI_PASSWORD;
+
+    if (!pass && process.env.NODE_ENV === 'production') {
+      console.warn('[WebUI] WEBUI_PASSWORD not set in production');
+      res.status(500).send('Server configuration error');
+      return;
+    }
+    
+    // In dev, if no password set, warn but allow
+    if (!pass) {
+       console.warn('[WebUI] WEBUI_PASSWORD not set. WebUI disabled.');
+       res.status(503).send('WebUI disabled');
+       return;
+    }
+
+    // SKIP authentication for WebSocket upgrades
+    if (req.path.startsWith('/ws')) {
+      next();
+      return;
+    }
+
+    const authHeader = req.headers.authorization || '';
+    const b64auth = authHeader.split(' ')[1] || '';
+    if (!b64auth) {
+      res.set('WWW-Authenticate', 'Basic realm="Remote Agent WebUI"');
+      res.status(401).send('Authentication required.');
+      return;
+    }
+
+    const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
+
+    if (login && password && login === user && password === pass) {
+      next();
+      return;
+    }
+
+    console.warn(`[WebUI] Auth failed for user: ${login}`);
+    res.set('WWW-Authenticate', 'Basic realm="Remote Agent WebUI"');
+    res.status(401).send('Authentication required.');
+  };
+
+  // Initialize WebUI Adapter
+  const webui = new WebUIAdapter();
+
+  // Register Upload Route
+  const uploadRouter = (await import('./routes/upload')).default;
+  app.use('/api', authMiddleware, uploadRouter);
+
+  // Register GitHub Route
+  const githubRouter = (await import('./routes/github')).default;
+  app.use('/api', authMiddleware, githubRouter);
+
+  // API Routes (Protected)
+  app.get('/api/conversations', authMiddleware, async (_req, res) => {
+    try {
+      const result = await pool.query(`
+        SELECT 
+          c.id, 
+          c.platform_type as platform, 
+          c.created_at, 
+          c.updated_at, 
+          c.cwd,
+          c.additional_dirs,
+          b.name as project_name
+        FROM remote_agent_conversations c
+        LEFT JOIN remote_agent_codebases b ON c.codebase_id = b.id
+        ORDER BY b.name NULLS LAST, c.updated_at DESC 
+        LIMIT 50
+      `);
+      res.json(result.rows);
+    } catch (error) {
+       console.error('[WebUI] Failed to fetch conversations:', error);
+       res.status(500).json({ error: 'Failed to fetch conversations' });
+    }
+  });
+
+  app.get('/api/codebases', authMiddleware, async (_req, res) => {
+    try {
+      const result = await pool.query('SELECT * FROM remote_agent_codebases ORDER BY name ASC');
+      res.json(result.rows);
+    } catch (error) {
+      console.error('[WebUI] Failed to fetch codebases:', error);
+      res.status(500).json({ error: 'Failed to fetch codebases' });
+    }
+  });
+
+  app.get('/api/conversations/:id/messages', authMiddleware, async (req, res) => {
+    try {
+      const messages = await messageDb.getMessages(req.params.id);
+      res.json(messages);
+    } catch (error) {
+      console.error('[WebUI] Failed to fetch messages:', error);
+      res.status(500).json({ error: 'Failed to fetch messages' });
+    }
+  });
+
+  app.get('/api/stats', authMiddleware, async (_req, res) => {
+    try {
+      const { getStats } = await import('./utils/telemetry');
+      const stats = await getStats();
+      res.json(stats);
+    } catch (error) {
+      console.error('[WebUI] Failed to fetch stats:', error);
+      res.status(500).json({ error: 'Failed to fetch stats' });
+    }
+  });
+
+  app.get('/api/conversations/:id/commands', authMiddleware, async (req, res) => {
+    try {
+      const convResult = await pool.query('SELECT codebase_id FROM remote_agent_conversations WHERE id = $1', [req.params.id]);
+      const codebaseId = convResult.rows[0]?.codebase_id;
+      
+      if (!codebaseId) {
+        res.json({});
+        return;
+      }
+      
+      const commands = await codebaseDb.getCodebaseCommands(codebaseId);
+      res.json(commands);
+    } catch (error) {
+      console.error('[WebUI] Failed to fetch commands:', error);
+      res.status(500).json({ error: 'Failed to fetch commands' });
+    }
+  });
+
+  app.get('/api/files', authMiddleware, async (req, res) => {
+    try {
+      const relPath = (req.query.path as string) || '';
+      
+      if (relPath.includes('..')) {
+        res.status(400).json({ error: 'Invalid path' });
+        return;
+      }
+
+      const fullPath = await resolveWorkspacePath(relPath);
+      const statInfo = await stat(fullPath);
+
+      if (!statInfo.isDirectory()) {
+         res.status(400).json({ error: 'Not a directory' });
+         return;
+      }
+
+      const files = await readdir(fullPath, { withFileTypes: true });
+      const listing = files.map(f => ({
+        name: f.name,
+        type: f.isDirectory() ? 'directory' : 'file',
+        path: join(relPath, f.name).replace(/\\/g, '/')
+      }));
+
+      res.json(listing);
+    } catch (_error) {
+      res.status(500).json({ error: 'Failed to list files' });
+    }
+  });
+
+  app.get('/api/files/content', authMiddleware, async (req, res) => {
+    try {
+       const relPath = (req.query.path as string) || '';
+
+       if (relPath.includes('..')) {
+         res.status(400).json({ error: 'Invalid path' });
+         return;
+       }
+       
+       const fullPath = await resolveWorkspacePath(relPath);
+       const statInfo = await stat(fullPath);
+       if (statInfo.size > 1024 * 1024) { 
+          res.status(400).json({ error: 'File too large' });
+          return;
+       }
+       
+       const content = await readFile(fullPath, 'utf-8');
+       res.json({ content });
+    } catch (_error) {
+       res.status(500).json({ error: 'Failed to read file' });
+    }
+  });
+
+  // Serve Frontend Static Files
+  app.use(authMiddleware, express.static('webui/dist'));
+  app.get('*', authMiddleware, (_req, res, next) => {
+      if (_req.path.startsWith('/api/') || _req.path.startsWith('/ws')) {
+        next();
+        return;
+      }
+      res.sendFile(join(process.cwd(), 'webui/dist/index.html'));
+  });
+
+  // WebSocket Server
+  const wss = new WebSocketServer({ 
+    server, 
+    path: '/ws'
+  });
+  
+  server.on('upgrade', (req, _socket, _head) => {
+    console.log(`[WebSocket] Upgrade requested for: ${req.url} from ${req.socket.remoteAddress}`);
+  });
+
+  // Verify Auth on Connection (Upgrade)
+  wss.on('connection', (ws, req) => {
+     console.log('[WebSocket] Connection established. Verifying auth...');
+     
+     let b64auth = (req.headers.authorization || '').split(' ')[1] || '';
+     
+     if (!b64auth) {
+        try {
+          const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
+          b64auth = url.searchParams.get('token') || '';
+          if (b64auth) console.log('[WebSocket] Auth token found in query params');
+        } catch (e) {
+          console.error('[WebSocket] Failed to parse URL for token:', e);
+        }
+     }
+
+     if (!b64auth && req.headers['sec-websocket-protocol']) {
+       const protocolHeader = req.headers['sec-websocket-protocol'] as string | string[] | undefined;
+       const header = Array.isArray(protocolHeader) ? protocolHeader[0] : protocolHeader;
+       if (typeof header === 'string') {
+         const protocols = header.split(',').map(p => p.trim());
+         if (protocols.length >= 2 && protocols[0] === 'authorization') {
+             b64auth = protocols[1];
+         }
+       }
+     }
+     
+     const user = process.env.WEBUI_USER || 'admin';
+     const pass = process.env.WEBUI_PASSWORD;
+     
+     if (!pass) {
+        console.error('[WebSocket] WEBUI_PASSWORD not set');
+        ws.close(1011, 'Server configuration error');
+        return;
+     }
+
+     if (!b64auth) {
+        console.warn('[WebSocket] No credentials provided in handshake');
+        ws.close(1008, 'Authentication required');
+        return;
+     }
+
+     const [login, password] = Buffer.from(b64auth, 'base64').toString().split(':');
+     if (login !== user || password !== pass) {
+        console.warn(`[WebSocket] Auth failed for user: ${login}`);
+        ws.close(1008, 'Authentication failed');
+        return;
+     }
+     
+     console.log('[WebSocket] Authentication successful for user:', login);
+     
+     // Setup Heartbeat
+     (ws as unknown as ExtWebSocket).isAlive = true;
+     ws.on('pong', () => { (ws as unknown as ExtWebSocket).isAlive = true; });
+
+     // Delegate to adapter
+     webui.handleConnection(ws, req);
+  });
+
+  // WebSocket Heartbeat
+  const heartbeatInterval = setInterval(() => {
+    wss.clients.forEach((client) => {
+      const extWs = client as unknown as ExtWebSocket;
+      if (!extWs.isAlive) {
+        extWs.terminate();
+        return;
+      }
+      
+      extWs.isAlive = false;
+      extWs.ping();
+    });
+  }, 30000);
+
+  wss.on('close', () => {
+    clearInterval(heartbeatInterval);
+  });
+  
+  // Handle incoming messages from WebUI
+  webui.onMessage((conversationId, content, attachments) => {
+      lockManager.acquireLock(conversationId, async () => {
+          await handleMessage(webui, conversationId, content, undefined, attachments).catch(e => {
+            console.error('[WebUI] Message handling error:', e);
+          });
+      }).catch(e => {
+        console.error('[WebUI] Lock acquisition error:', e);
+      });
+  });
+
+  server.listen(port, () => {
+    console.log(`[Express] Server listening on port ${port}`);
   });
 
   // Initialize platform adapter (Telegram)
@@ -180,7 +496,7 @@ async function main(): Promise<void> {
 
     if (!message) return;
 
-    // Fire-and-forget: handler returns immediately, processing happens async
+    // Send to Orchestrator
     lockManager
       .acquireLock(conversationId, async () => {
         await handleMessage(telegram, conversationId, message);
@@ -200,7 +516,7 @@ async function main(): Promise<void> {
     pool.end().then(() => {
       console.log('[Database] Connection pool closed');
       process.exit(0);
-    });
+    }).catch(_e => process.exit(1));
   };
 
   process.once('SIGINT', shutdown);
@@ -208,7 +524,7 @@ async function main(): Promise<void> {
 
   console.log('[App] Remote Coding Agent is ready!');
   console.log('[App] Send messages to your Telegram bot to get started');
-  console.log('[App] Test endpoint available: POST http://localhost:' + port + '/test/message');
+  console.log(`[App] Test endpoint available: POST http://localhost:${String(port)}/test/message`);
 }
 
 // Run the application

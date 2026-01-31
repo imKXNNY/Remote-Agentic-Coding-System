@@ -1,0 +1,47 @@
+{
+    "type": "object",
+    "properties": {
+        "severity": {
+            "type": "string",
+            "enum": [
+                "low",
+                "medium",
+                "high",
+                "critical"
+            ],
+            "description": "The severity of the issue based on impact and urgency"
+        },
+        "component": {
+            "type": "string",
+            "description": "The architectural component affected (e.g., auth, database, frontend)"
+        },
+        "suggested_labels": {
+            "type": "array",
+            "items": {
+                "type": "string"
+            },
+            "description": "List of GitHub labels to apply"
+        },
+        "estimated_effort": {
+            "type": "string",
+            "enum": [
+                "small",
+                "medium",
+                "large",
+                "xlarge"
+            ],
+            "description": "Estimated size of the task"
+        },
+        "technical_summary": {
+            "type": "string",
+            "description": "A concise technical summary of the problem and potential solution path"
+        }
+    },
+    "required": [
+        "severity",
+        "component",
+        "suggested_labels",
+        "technical_summary"
+    ],
+    "additionalProperties": false
+}

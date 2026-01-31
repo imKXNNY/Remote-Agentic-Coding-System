@@ -72,9 +72,11 @@ function setupAuth(): void {
   const configContent = `# Codex Configuration - YOLO Mode (Full Automation)
 # approval_policy = "never" - No approval prompts
 # sandbox_mode = "danger-full-access" - Full system access
+# web_search = "live" - Enable real-time web search
 
 approval_policy = "never"
 sandbox_mode = "danger-full-access"
+web_search = "live"
 
 [sandbox_workspace_write]
 network_access = true
