@@ -36,8 +36,8 @@ export async function logTelemetry(event: TelemetryEvent): Promise<void> {
   }
 }
 
-export async function getStats(): Promise<any> {
-  const result = await pool.query(`
+export async function getStats(): Promise<Record<string, unknown>[]> {
+  const result = await pool.query<Record<string, unknown>>(`
     SELECT 
       assistant_type,
       COUNT(*) as total_requests,

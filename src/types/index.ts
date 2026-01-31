@@ -10,6 +10,7 @@ export interface Conversation {
   cwd: string | null;
   ai_assistant_type: string;
   model_id: string | null;
+  additional_dirs: string[] | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -106,7 +107,7 @@ export interface IAssistantClient {
     cwd: string, 
     resumeSessionId?: string, 
     attachments?: string[],
-    options?: { model?: string; sandbox?: string; outputFormat?: 'text' | 'json' }
+    options?: { model?: string; sandbox?: string; outputFormat?: 'text' | 'json'; additional_dirs?: string[] }
   ): AsyncGenerator<MessageChunk>;
 
   /**

@@ -22,6 +22,7 @@ import { handleMessage } from './orchestrator/orchestrator';
 import { pool } from './db/connection';
 import { ConversationLockManager } from './utils/conversation-lock';
 import { resolveWorkspacePath } from './utils/paths';
+import { startMcpServer } from './mcp-server';
 
 // Extended WebSocket for heartbeat
 interface ExtWebSocket extends WebSocket {
@@ -29,6 +30,14 @@ interface ExtWebSocket extends WebSocket {
 }
 
 async function main(): Promise<void> {
+  const isMcpMode = process.argv.includes('--mcp');
+  
+  if (isMcpMode) {
+    console.error('[App] Starting in MCP Mode');
+    await startMcpServer();
+    return;
+  }
+
   console.log('[App] Starting Remote Coding Agent (Telegram + Claude MVP)');
 
   // Validate required environment variables
@@ -248,6 +257,7 @@ async function main(): Promise<void> {
           c.created_at, 
           c.updated_at, 
           c.cwd,
+          c.additional_dirs,
           b.name as project_name
         FROM remote_agent_conversations c
         LEFT JOIN remote_agent_codebases b ON c.codebase_id = b.id

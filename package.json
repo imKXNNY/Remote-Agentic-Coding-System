@@ -7,6 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
+    "mcp": "node dist/index.js --mcp",
     "setup-auth": "node dist/scripts/setup-auth.js",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -32,6 +33,7 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.30",
+    "@modelcontextprotocol/sdk": "^1.25.3",
     "@octokit/rest": "^22.0.0",
     "@openai/codex-sdk": "^0.57.0",
     "@types/multer": "^2.0.0",

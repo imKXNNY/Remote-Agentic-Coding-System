@@ -90,6 +90,8 @@ Command Management:
 Codex Integration:
   /codex-review [branch|commit|uncommitted] [target] - Run native Codex review
   /codex-exec <prompt> - Run automated task with JSON output mode
+  /codex-add-dir <path> - Add additional directory for Codex access
+  /codex-clear-dirs - Clear all additional directories
 
 Codebase:
   /clone <repo-url> - Clone repository
@@ -134,6 +136,38 @@ Session:
       return {
         success: true,
         message: `Sandbox mode for codebase set to: ${mode}`,
+        modified: true,
+      };
+    }
+
+    case 'codex-add-dir': {
+      if (args.length === 0) {
+        return { success: false, message: 'Usage: /codex-add-dir <path>' };
+      }
+      const newDir = join('/workspace', args[0]);
+      try {
+        await access(newDir);
+        const currentDirs = conversation.additional_dirs || [];
+        if (currentDirs.includes(newDir)) {
+           return { success: true, message: `Directory already exists in list: ${newDir}` };
+        }
+        const updatedDirs = [...currentDirs, newDir];
+        await db.updateConversation(conversation.id, { additional_dirs: updatedDirs });
+        return {
+          success: true,
+          message: `Added additional directory: ${newDir}\n\nCodex now has access to:\n- ${conversation.cwd || '(main)'}\n${updatedDirs.map(d => `- ${d}`).join('\n')}`,
+          modified: true,
+        };
+      } catch (_error) {
+        return { success: false, message: `Failed to add directory: Does not exist or no access to ${newDir}` };
+      }
+    }
+
+    case 'codex-clear-dirs': {
+      await db.updateConversation(conversation.id, { additional_dirs: [] });
+      return {
+        success: true,
+        message: 'All additional directories cleared.',
         modified: true,
       };
     }
@@ -220,6 +254,10 @@ Session:
       }
 
       msg += `\n\nCurrent Working Directory: ${conversation.cwd || 'Not set'}`;
+
+      if (conversation.additional_dirs && conversation.additional_dirs.length > 0) {
+        msg += `\nAdditional Directories:\n${conversation.additional_dirs.map(d => `- ${d}`).join('\n')}`;
+      }
 
       const session = await sessionDb.getActiveSession(conversation.id);
       if (session?.id) {

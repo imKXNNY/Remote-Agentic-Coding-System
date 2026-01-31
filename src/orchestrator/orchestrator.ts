@@ -160,6 +160,7 @@ export async function handleMessage(
     const options = {
       model: conversation.model_id || undefined,
       sandbox: codebase?.sandbox_mode || 'workspace-write',
+      additional_dirs: conversation.additional_dirs || undefined,
     };
 
     const startTime = Date.now();

@@ -51,11 +51,11 @@ export class CodexClient implements IAssistantClient {
     cwd: string,
     resumeSessionId?: string,
     attachments?: string[],
-    options?: { model?: string; sandbox?: string; outputFormat?: 'text' | 'json' }
+    options?: { model?: string; sandbox?: string; outputFormat?: 'text' | 'json'; additional_dirs?: string[] }
   ): AsyncGenerator<MessageChunk> {
     // Check for JSON output mode
     if (options?.outputFormat === 'json') {
-      yield* this.runJsonExec(prompt, cwd, attachments, options.model);
+      yield* this.runJsonExec(prompt, cwd, attachments, options.model, options.additional_dirs);
       return;
     }
 
@@ -68,31 +68,37 @@ export class CodexClient implements IAssistantClient {
     const codex = await getCodex();
 
     // Get or create thread
-    let thread;
+    let thread: { runStreamed: (prompt: string) => Promise<{ events: AsyncIterable<unknown> }>, id?: string | null };
     if (resumeSessionId) {
       console.log(`[Codex] Resuming thread: ${resumeSessionId}`);
       try {
-        thread = codex.resumeThread(resumeSessionId, {
+        // Use type assertion for members that might be missing from outdated SDK types
+        const resumeThread = codex.resumeThread.bind(codex) as (id: string, options: Record<string, unknown>) => typeof thread;
+        thread = resumeThread(resumeSessionId, {
           workingDirectory: cwd,
           skipGitRepoCheck: true,
           model: options?.model,
+          additionalDirectories: options?.additional_dirs,
         });
-      } catch (error) {
-        console.error(`[Codex] Failed to resume thread ${resumeSessionId}, creating new one:`, error);
-        thread = codex.startThread({
+      } catch (_error) {
+        const startThread = codex.startThread.bind(codex) as (options: Record<string, unknown>) => typeof thread;
+        thread = startThread({
           workingDirectory: cwd,
           skipGitRepoCheck: true,
           model: options?.model,
           sandboxMode: options?.sandbox as 'read-only' | 'workspace-write' | 'danger-full-access',
+          additionalDirectories: options?.additional_dirs,
         });
       }
     } else {
       console.log(`[Codex] Starting new thread in ${cwd} (Model: ${options?.model || 'default'}, Sandbox: ${options?.sandbox || 'default'})`);
-      thread = codex.startThread({
+      const startThread = codex.startThread.bind(codex) as (options: Record<string, unknown>) => typeof thread;
+      thread = startThread({
         workingDirectory: cwd,
         skipGitRepoCheck: true,
         model: options?.model,
         sandboxMode: options?.sandbox as 'read-only' | 'workspace-write' | 'danger-full-access',
+        additionalDirectories: options?.additional_dirs,
       });
     }
 
@@ -101,9 +107,16 @@ export class CodexClient implements IAssistantClient {
       const result = await thread.runStreamed(prompt);
 
       // Process streaming events
-      for await (const event of result.events) {
+      for await (const eventObj of result.events) {
+        const event = eventObj as { 
+          type: string; 
+          message?: string; 
+          error?: { message?: string }; 
+          item?: { type: string; text?: string; name?: string; command?: string; input?: unknown };
+          sessionId?: string;
+        };
         // Handle error events
-        if (event.type === 'error') {
+        if (event.type === 'error' && event.message) {
           console.error('[Codex] Stream error:', event.message);
           // Don't send MCP timeout errors (they're optional)
           if (!event.message.includes('MCP client')) {
@@ -123,7 +136,7 @@ export class CodexClient implements IAssistantClient {
         }
 
         // Handle item.completed events - map to MessageChunk types
-        if (event.type === 'item.completed') {
+        if (event.type === 'item.completed' && event.item) {
           const item = event.item;
 
           switch (item.type) {
@@ -175,7 +188,8 @@ export class CodexClient implements IAssistantClient {
     prompt: string,
     cwd: string,
     attachments: string[] = [],
-    model?: string
+    model?: string,
+    additionalDirs: string[] = []
   ): AsyncGenerator<MessageChunk> {
     const { spawn } = await import('child_process');
     
@@ -185,6 +199,9 @@ export class CodexClient implements IAssistantClient {
     if (model) args.push('--model', model);
     for (const att of attachments) {
       args.push('-i', att);
+    }
+    for (const dir of additionalDirs) {
+      args.push('--add-dir', dir);
     }
 
     const child = spawn('codex', args, {

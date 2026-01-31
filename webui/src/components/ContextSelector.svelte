@@ -3,6 +3,7 @@
   import { API } from '../lib/api';
 
   export let selectedCodebaseId: string | null = null;
+  export let additionalDirs: string[] = [];
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let codebases: any[] = [];
@@ -134,6 +135,25 @@
     </select>
   {/if}
 
+  {#if additionalDirs.length > 0}
+    <div class="additional-dirs">
+      <div class="section-header">
+        <span>Additional Context</span>
+        <button class="clear-btn" on:click={() => dispatch('select', '/codex-clear-dirs')}>
+          Clear All
+        </button>
+      </div>
+      <div class="dir-chips">
+        {#each additionalDirs as dir}
+          <div class="dir-chip shadow" title={dir}>
+            <span class="dir-icon">📁</span>
+            <span class="dir-path">{dir.split(/[/\\]/).pop() || dir}</span>
+          </div>
+        {/each}
+      </div>
+    </div>
+  {/if}
+
   {#if showIssuePicker}
     <div class="issue-picker">
       <div class="picker-header">
@@ -244,6 +264,72 @@
   .codebase-dropdown option {
     background: #1a1a1a;
     color: var(--text-primary);
+  }
+
+  /* Additional Dirs */
+  .additional-dirs {
+    margin-top: var(--gap-md);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding-top: var(--gap-md);
+    border-top: 1px solid var(--border-subtle);
+  }
+
+  .section-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .clear-btn {
+    background: transparent;
+    border: none;
+    color: var(--accent-orange);
+    cursor: pointer;
+    font-size: 0.7rem;
+    padding: 2px 4px;
+    border-radius: 4px;
+    transition: var(--transition-fast);
+  }
+
+  .clear-btn:hover {
+    background: rgba(255, 165, 0, 0.1);
+    text-decoration: underline;
+  }
+
+  .dir-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .dir-chip {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-subtle);
+    padding: 4px 8px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    max-width: 100%;
+  }
+
+  .dir-icon {
+    font-size: 0.9rem;
+    opacity: 0.7;
+  }
+
+  .dir-path {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   /* Issue Picker */

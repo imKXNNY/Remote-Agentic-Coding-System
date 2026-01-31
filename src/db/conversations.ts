@@ -19,7 +19,7 @@ export async function getOrCreateConversation(
   }
 
   // Determine assistant type from codebase or environment
-  let assistantType = process.env.DEFAULT_AI_ASSISTANT || 'claude';
+  let assistantType = process.env.DEFAULT_AI_ASSISTANT ?? 'claude';
   if (codebaseId) {
     const codebase = await pool.query<{ ai_assistant_type: string }>(
       'SELECT ai_assistant_type FROM remote_agent_codebases WHERE id = $1',
@@ -40,27 +40,31 @@ export async function getOrCreateConversation(
 
 export async function updateConversation(
   id: string,
-  updates: Partial<Pick<Conversation, 'codebase_id' | 'cwd' | 'ai_assistant_type' | 'model_id'>>
+  updates: Partial<Pick<Conversation, 'codebase_id' | 'cwd' | 'ai_assistant_type' | 'model_id' | 'additional_dirs'>>
 ): Promise<void> {
   const fields: string[] = [];
   const values: (string | null)[] = [];
   let i = 1;
 
   if (updates.codebase_id !== undefined) {
-    fields.push(`codebase_id = $${i++}`);
+    fields.push(`codebase_id = $${String(i++)}`);
     values.push(updates.codebase_id);
   }
   if (updates.cwd !== undefined) {
-    fields.push(`cwd = $${i++}`);
+    fields.push(`cwd = $${String(i++)}`);
     values.push(updates.cwd);
   }
   if (updates.ai_assistant_type !== undefined) {
-    fields.push(`ai_assistant_type = $${i++}`);
+    fields.push(`ai_assistant_type = $${String(i++)}`);
     values.push(updates.ai_assistant_type);
   }
   if (updates.model_id !== undefined) {
-    fields.push(`model_id = $${i++}`);
+    fields.push(`model_id = $${String(i++)}`);
     values.push(updates.model_id);
+  }
+  if (updates.additional_dirs !== undefined) {
+    fields.push(`additional_dirs = $${String(i++)}`);
+    values.push(updates.additional_dirs as unknown as string); // pg handles string arrays
   }
 
   if (fields.length === 0) {
@@ -71,7 +75,7 @@ export async function updateConversation(
   values.push(id);
 
   await pool.query(
-    `UPDATE remote_agent_conversations SET ${fields.join(', ')} WHERE id = $${i}`,
+    `UPDATE remote_agent_conversations SET ${fields.join(', ')} WHERE id = $${String(i)}`,
     values
   );
 }

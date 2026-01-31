@@ -18,6 +18,7 @@
     project_name?: string;
     cwd?: string;
     codebase_id?: string;
+    additional_dirs?: string[];
   }
 
   let conversationId = '';
@@ -344,7 +345,11 @@
 
     {#if showControls}
       <div class="chat-controls glass shadow">
-        <ContextSelector {selectedCodebaseId} on:select={handleControlAction} />
+        <ContextSelector
+          {selectedCodebaseId}
+          additionalDirs={selectedConversation?.additional_dirs || []}
+          on:select={handleControlAction}
+        />
         <CommandPalette {conversationId} on:select={handleControlAction} />
       </div>
     {/if}

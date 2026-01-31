@@ -53,7 +53,8 @@ web_search = "live"
 
 ---
 
-### 4. Structured Output for GitHub Issues
+### 4. ~~Structured Output for GitHub Issues~~ ✅
+**Status**: Implemented (via `/codex-exec` and JSONL mode)
 **Value**: Consistent issue triage, metadata extraction  
 **Effort**: 2-3 days  
 **Approach**: Use `codex exec --output-schema` for issue processing
@@ -151,6 +152,11 @@ gantt
     section P2
     Model selection            :p2-6, after p1-5, 2d
     Sandbox config             :p2-7, after p2-6, 3d
+    section P3
+    Multi-directory mode       :p3-12, after p2-7, 2d
+    MCP Server mode            :p3-11, after p3-12, 5d
+    Codex Cloud integration    :p3-9, after p3-11, 7d
+    App Server migration       :p3-10, after p3-9, 10d
 ```
 
 ---

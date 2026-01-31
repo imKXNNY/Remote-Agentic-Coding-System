@@ -5,7 +5,7 @@ import { pool } from '../db/connection';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 
-async function runMigration() {
+async function runMigration(): Promise<void> {
   const migrationPath = join(__dirname, '../../migrations/005_sandbox_config.sql');
   console.log(`[Migration] Reading from ${migrationPath}`);
   
