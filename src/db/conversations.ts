@@ -40,7 +40,7 @@ export async function getOrCreateConversation(
 
 export async function updateConversation(
   id: string,
-  updates: Partial<Pick<Conversation, 'codebase_id' | 'cwd' | 'ai_assistant_type' | 'model_id' | 'additional_dirs'>>
+  updates: Partial<Pick<Conversation, 'codebase_id' | 'cwd' | 'ai_assistant_type' | 'model_id' | 'additional_dirs' | 'last_bootstrap_at' | 'bootstrap_status'>>
 ): Promise<void> {
   const fields: string[] = [];
   const values: (string | null)[] = [];
@@ -65,6 +65,14 @@ export async function updateConversation(
   if (updates.additional_dirs !== undefined) {
     fields.push(`additional_dirs = $${String(i++)}`);
     values.push(updates.additional_dirs as unknown as string); // pg handles string arrays
+  }
+  if (updates.last_bootstrap_at !== undefined) {
+    fields.push(`last_bootstrap_at = $${String(i++)}`);
+    values.push(updates.last_bootstrap_at ? (updates.last_bootstrap_at as any) : null);
+  }
+  if (updates.bootstrap_status !== undefined) {
+    fields.push(`bootstrap_status = $${String(i++)}`);
+    values.push(updates.bootstrap_status);
   }
 
   if (fields.length === 0) {

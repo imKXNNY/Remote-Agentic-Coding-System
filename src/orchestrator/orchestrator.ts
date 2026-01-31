@@ -13,6 +13,7 @@ import * as commandHandler from '../handlers/command-handler';
 import { formatToolCall } from '../utils/tool-formatter';
 import { substituteVariables } from '../utils/variable-substitution';
 import { getAssistantClient } from '../clients/factory';
+import * as bootstrap from '../utils/bootstrap';
 
 export async function handleMessage(
   platform: IPlatformAdapter,
@@ -122,7 +123,19 @@ export async function handleMessage(
 
     // Get or create session (handle plan→execute transition)
     let session = await sessionDb.getActiveSession(conversation.id);
-    const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
+    const codebase = conversation.codebase_id ? await codebaseDb.getCodebase(conversation.codebase_id) : null;
+
+    // --- PHASE 17 Booster: Auto-Provisioning ---
+    if (codebase && conversation.bootstrap_status !== 'success') {
+      const bootResult = await bootstrap.runBootstrap(conversation, codebase, aiClient);
+      if (bootResult.status === 'success') {
+        await platform.sendMessage(conversationId, `✅ ${bootResult.message}`);
+      } else if (bootResult.status === 'needs-approval') {
+        await platform.sendMessage(conversationId, bootResult.message);
+      } else if (bootResult.status === 'failed') {
+        await platform.sendMessage(conversationId, `❌ ${bootResult.message}`);
+      }
+    }
     const cwd = conversation.cwd || codebase?.default_cwd || '/workspace';
 
     // Check for plan→execute transition (requires NEW session per PRD)

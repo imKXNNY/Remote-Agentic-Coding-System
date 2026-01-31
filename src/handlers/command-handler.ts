@@ -11,6 +11,8 @@ import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
 import { runCodexReview } from './codex-cli';
+import * as bootstrap from '../utils/bootstrap';
+import { getAssistantClient } from '../clients/factory';
 
 const execAsync = promisify(exec);
 
@@ -103,6 +105,7 @@ Codebase:
 Session:
   /status - Show state
   /reset - Clear session
+  /bootstrap [force] - Auto-provision project environment
   /help - Show help
   /setmodel <id> - Set assistant model (GPT-5, etc.)
   /setsandbox <mode> - Set sandbox (read-only, workspace-write, danger-full-access)`,
@@ -169,6 +172,24 @@ Session:
         success: true,
         message: 'All additional directories cleared.',
         modified: true,
+      };
+    }
+
+    case 'bootstrap': {
+      if (!conversation.codebase_id) {
+        return { success: false, message: 'No codebase context. Use /clone or /setcwd first.' };
+      }
+      const force = args[0] === 'force';
+      const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
+      if (!codebase) return { success: false, message: 'Codebase not found.' };
+
+      const aiClient = getAssistantClient(conversation.ai_assistant_type);
+      const result = await bootstrap.runBootstrap(conversation, codebase, aiClient, force);
+      
+      return {
+        success: result.status === 'success' || result.status === 'skipped',
+        message: result.message,
+        modified: true
       };
     }
 
@@ -286,10 +307,12 @@ Session:
         cwd: string;
         codebase_id?: string | null;
         ai_assistant_type?: string;
+        bootstrap_status?: 'pending';
       } = { cwd: newCwd };
       if (codebase) {
         updates.codebase_id = codebase.id;
         updates.ai_assistant_type = codebase.ai_assistant_type;
+        updates.bootstrap_status = 'pending';
         console.log(`[Command] Switched codebase context to: ${codebase.name}`);
       } else {
         // Clear codebase context if moving outside known repos
@@ -408,6 +431,7 @@ Session:
         await db.updateConversation(conversation.id, {
           codebase_id: codebase.id,
           cwd: targetPath,
+          bootstrap_status: 'pending'
         });
 
         // Reset session when cloning a new repository
