@@ -25,7 +25,8 @@ const storage = multer.diskStorage({
     const timestamp = Date.now().toString();
     const randomPart = Math.round(Math.random() * 1e9).toString();
     const uniqueSuffix = `${timestamp}-${randomPart}`;
-    const ext = file.originalname.split('.').pop() ?? 'dat';
+    const extCandidate = file.originalname.split('.').pop();
+    const ext = extCandidate && extCandidate.length > 0 ? extCandidate : 'dat';
     cb(null, `${file.fieldname}-${uniqueSuffix}.${ext}`);
   },
 });
