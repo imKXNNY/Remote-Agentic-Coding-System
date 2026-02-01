@@ -43,7 +43,7 @@ export async function updateConversation(
   updates: Partial<Pick<Conversation, 'codebase_id' | 'cwd' | 'ai_assistant_type' | 'model_id' | 'additional_dirs' | 'last_bootstrap_at' | 'bootstrap_status'>>
 ): Promise<void> {
   const fields: string[] = [];
-  const values: (string | null)[] = [];
+  const values: (string | null | Date | string[])[] = [];
   let i = 1;
 
   if (updates.codebase_id !== undefined) {
@@ -64,11 +64,11 @@ export async function updateConversation(
   }
   if (updates.additional_dirs !== undefined) {
     fields.push(`additional_dirs = $${String(i++)}`);
-    values.push(updates.additional_dirs as unknown as string); // pg handles string arrays
+    values.push(updates.additional_dirs);
   }
   if (updates.last_bootstrap_at !== undefined) {
     fields.push(`last_bootstrap_at = $${String(i++)}`);
-    values.push(updates.last_bootstrap_at ? (updates.last_bootstrap_at as any) : null);
+    values.push(updates.last_bootstrap_at ?? null);
   }
   if (updates.bootstrap_status !== undefined) {
     fields.push(`bootstrap_status = $${String(i++)}`);

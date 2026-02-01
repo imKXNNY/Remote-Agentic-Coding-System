@@ -72,7 +72,7 @@ export async function runBootstrap(
   conversation: Conversation,
   codebase: Codebase,
   aiClient: IAssistantClient,
-  force: boolean = false
+  force = false
 ): Promise<{ status: 'success' | 'failed' | 'skipped' | 'needs-approval'; message: string }> {
   
   // Skip if already succeeded and not forced
@@ -88,7 +88,7 @@ export async function runBootstrap(
     };
   }
 
-  const cwd = conversation.cwd || codebase.default_cwd;
+  const cwd = conversation.cwd ?? codebase.default_cwd;
   const setupCommands = await detectSetup(cwd);
 
   if (setupCommands.length === 0) {
