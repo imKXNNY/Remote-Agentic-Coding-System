@@ -118,16 +118,40 @@ export async function runBootstrap(
     // We use the AI client to execute these in the same sandbox
     // Note: We don't save these to message history!
     let success = false;
+    let failure = false;
     for await (const chunk of aiClient.sendQuery(prompt, cwd, undefined, undefined, {
         sandbox: codebase.sandbox_mode,
         outputFormat: 'text' 
     })) {
-        if (chunk.type === 'assistant' && (chunk.content?.toLowerCase().includes('success') || chunk.content?.toLowerCase().includes('finish') || chunk.content?.toLowerCase().includes('done'))) {
-            success = true;
+        if (chunk.type !== 'assistant' || !chunk.content) continue;
+        const normalized = chunk.content.toLowerCase();
+
+        // Flag obvious failure words
+        if (
+          normalized.includes('error') ||
+          normalized.includes('failed') ||
+          normalized.includes('failure') ||
+          normalized.includes('not successful') ||
+          normalized.includes('exception') ||
+          normalized.includes('finished with errors')
+        ) {
+          failure = true;
+        }
+
+        // Mark success only when positive language appears without failure terms
+        const positiveMatch =
+          normalized.includes('success') ||
+          normalized.includes('completed successfully') ||
+          normalized.includes('installation complete') ||
+          normalized.includes('setup complete') ||
+          normalized.includes('ready to go');
+
+        if (positiveMatch && !failure) {
+          success = true;
         }
     }
 
-    if (!success) {
+    if (failure || !success) {
       console.warn('[Bootstrap] Setup finished without an explicit success confirmation.');
       await db.updateConversation(conversation.id, { bootstrap_status: 'failed' });
       return {
