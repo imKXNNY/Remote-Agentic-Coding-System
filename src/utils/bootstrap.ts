@@ -121,10 +121,14 @@ export async function runBootstrap(
     }
 
     if (!success) {
-      console.warn('[Bootstrap] AI completed setup but success confirmation was ambiguous.');
+      console.warn('[Bootstrap] Setup finished without an explicit success confirmation.');
+      await db.updateConversation(conversation.id, { bootstrap_status: 'failed' });
+      return {
+        status: 'failed',
+        message: 'Provisioning finished without confirmation. Please check logs and retry /bootstrap force.',
+      };
     }
 
-    // Always mark success if no errors were thrown, as AI confirms helpfully
     await db.updateConversation(conversation.id, { 
       bootstrap_status: 'success', 
       last_bootstrap_at: new Date() 
