@@ -76,17 +76,17 @@ export async function handleMessage(
         return;
       }
 
-      const commandDef = codebase.commands[commandName];
-      if (!commandDef) {
+      if (!Object.prototype.hasOwnProperty.call(codebase.commands, commandName)) {
         await platform.sendMessage(
           conversationId,
           `Command '${commandName}' not found. Use /commands to see available.`
         );
         return;
       }
+      const commandDef = codebase.commands[commandName];
 
       // Read command file
-      const cwd = conversation.cwd || codebase.default_cwd;
+      const cwd = conversation.cwd ?? codebase.default_cwd;
       const commandFilePath = join(cwd, commandDef.path);
 
       try {
@@ -101,7 +101,7 @@ export async function handleMessage(
           console.log('[Orchestrator] Appended issue/PR context to command prompt');
         }
 
-        console.log(`[Orchestrator] Executing '${commandName}' with ${args.length} args`);
+        console.log(`[Orchestrator] Executing '${commandName}' with ${String(args.length)} args`);
       } catch (error) {
         const err = error as Error;
         await platform.sendMessage(conversationId, `Failed to read command file: ${err.message}`);
@@ -136,11 +136,12 @@ export async function handleMessage(
         await platform.sendMessage(conversationId, `❌ ${bootResult.message}`);
       }
     }
-    const cwd = conversation.cwd || codebase?.default_cwd || '/workspace';
+    const cwd = conversation.cwd ?? codebase?.default_cwd ?? '/workspace';
 
     // Check for plan→execute transition (requires NEW session per PRD)
     // Note: The planning command is named 'plan-feature', not 'plan'
-    const needsNewSession = commandName === 'execute' && session?.metadata?.lastCommand === 'plan-feature';
+    const lastCommand = (session?.metadata as { lastCommand?: string } | undefined)?.lastCommand;
+    const needsNewSession = commandName === 'execute' && lastCommand === 'plan-feature';
 
     if (needsNewSession) {
       console.log('[Orchestrator] Plan→Execute transition: creating new session');
@@ -171,9 +172,9 @@ export async function handleMessage(
 
     let fullAssistantResponse = '';
     const options = {
-      model: conversation.model_id || undefined,
-      sandbox: codebase?.sandbox_mode || 'workspace-write',
-      additional_dirs: conversation.additional_dirs || undefined,
+      model: conversation.model_id ?? undefined,
+      sandbox: codebase?.sandbox_mode ?? 'workspace-write',
+      additional_dirs: conversation.additional_dirs ?? undefined,
     };
 
     const startTime = Date.now();
@@ -185,7 +186,7 @@ export async function handleMessage(
         for await (const msg of aiClient.sendQuery(
           promptToSend,
           cwd,
-          session.assistant_session_id || undefined,
+          session.assistant_session_id ?? undefined,
           attachments,
           options
         )) {
@@ -210,7 +211,7 @@ export async function handleMessage(
         await import('../utils/telemetry').then(m => m.logTelemetry({
           conversation_id: conversation.id,
           assistant_type: conversation.ai_assistant_type,
-          model_id: conversation.model_id || undefined,
+          model_id: conversation.model_id ?? undefined,
           latency_to_first_token_ms: firstTokenTime ? firstTokenTime - startTime : undefined,
           latency_total_ms: Date.now() - startTime,
           status: 'success'
@@ -220,7 +221,7 @@ export async function handleMessage(
          await import('../utils/telemetry').then(m => m.logTelemetry({
            conversation_id: conversation.id,
            assistant_type: conversation.ai_assistant_type,
-           model_id: conversation.model_id || undefined,
+           model_id: conversation.model_id ?? undefined,
            latency_total_ms: Date.now() - startTime,
            status: 'error',
            error_message: (error as Error).message
@@ -235,7 +236,7 @@ export async function handleMessage(
       for await (const msg of aiClient.sendQuery(
         promptToSend,
         cwd,
-        session.assistant_session_id || undefined,
+        session.assistant_session_id ?? undefined,
         undefined,
         options
       )) {
@@ -265,7 +266,8 @@ export async function handleMessage(
       }
 
       if (fullAssistantResponse) {
-        console.log(`[Orchestrator] Sending final message (${fullAssistantResponse.length} chars)`);
+        const responseLength = String(fullAssistantResponse.length);
+        console.log(`[Orchestrator] Sending final message (${responseLength} chars)`);
         await platform.sendMessage(conversationId, fullAssistantResponse);
       }
     }

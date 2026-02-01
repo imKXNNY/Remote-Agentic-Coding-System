@@ -11,18 +11,21 @@ const uploadDir = join(tmpdir(), 'remote-agent-uploads');
 
 // Initialize upload storage
 const storage = multer.diskStorage({
-  destination: async (_req, _file, cb) => {
-    try {
-      await mkdir(uploadDir, { recursive: true });
-      cb(null, uploadDir);
-    } catch (error) {
-      cb(error as Error, '');
-    }
+  destination: (_req, _file, cb) => {
+    mkdir(uploadDir, { recursive: true })
+      .then(() => {
+        cb(null, uploadDir);
+      })
+      .catch(error => {
+        cb(error as Error, '');
+      });
   },
   filename: (_req, file, cb) => {
     // Keep original extension, add timestamp for uniqueness
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
-    const ext = file.originalname.split('.').pop() || 'dat';
+    const timestamp = Date.now().toString();
+    const randomPart = Math.round(Math.random() * 1e9).toString();
+    const uniqueSuffix = `${timestamp}-${randomPart}`;
+    const ext = file.originalname.split('.').pop() ?? 'dat';
     cb(null, `${file.fieldname}-${uniqueSuffix}.${ext}`);
   },
 });

@@ -50,6 +50,7 @@ class MCPAdapter implements IPlatformAdapter {
  * Start the MCP server on stdio
  */
 export async function startMcpServer(): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-deprecated
   const server = new Server(
     {
       name: 'remote-agent-codex',
@@ -132,11 +133,13 @@ export async function startMcpServer(): Promise<void> {
   // --- Resources ---
 
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
-    const result = await pool.query('SELECT id, platform_conversation_id FROM remote_agent_conversations WHERE platform_type = \'mcp\'');
+    const result = await pool.query<{ id: string; platform_conversation_id: string }>(
+      'SELECT id, platform_conversation_id FROM remote_agent_conversations WHERE platform_type = \'mcp\''
+    );
     return {
       resources: result.rows.map((row) => ({
-        uri: `codex://conversations/${String(row.platform_conversation_id)}`,
-        name: `Conversation ${String(row.platform_conversation_id)}`,
+        uri: `codex://conversations/${row.platform_conversation_id}`,
+        name: `Conversation ${row.platform_conversation_id}`,
         mimeType: 'text/markdown',
       })),
     };
@@ -153,10 +156,6 @@ export async function startMcpServer(): Promise<void> {
 
     const platformConversationId = match[1];
     const conversation = await db.getOrCreateConversation('mcp', platformConversationId);
-    
-    if (!conversation) {
-      throw new Error(`Conversation not found: ${platformConversationId}`);
-    }
 
     const messages = await messageDb.getMessages(conversation.id);
     const content = messages.map(m => `**${m.role.toUpperCase()}**: ${m.content}`).join('\n\n');

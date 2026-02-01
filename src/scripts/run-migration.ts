@@ -21,4 +21,4 @@ async function runMigration(): Promise<void> {
   }
 }
 
-runMigration();
+void runMigration();

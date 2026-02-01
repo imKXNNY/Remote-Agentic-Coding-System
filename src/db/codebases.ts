@@ -11,11 +11,11 @@ export async function createCodebase(data: {
   ai_assistant_type?: string;
   sandbox_mode?: 'read-only' | 'workspace-write' | 'danger-full-access';
 }): Promise<Codebase> {
-  const assistantType = data.ai_assistant_type || 'claude';
-  const sandboxMode = data.sandbox_mode || 'workspace-write';
+  const assistantType = data.ai_assistant_type ?? 'claude';
+  const sandboxMode = data.sandbox_mode ?? 'workspace-write';
   const result = await pool.query<Codebase>(
     'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, ai_assistant_type, sandbox_mode) VALUES ($1, $2, $3, $4, $5) RETURNING *',
-    [data.name, data.repository_url || null, data.default_cwd, assistantType, sandboxMode]
+    [data.name, data.repository_url ?? null, data.default_cwd, assistantType, sandboxMode]
   );
   return result.rows[0];
 }
@@ -24,7 +24,7 @@ export async function getCodebase(id: string): Promise<Codebase | null> {
   const result = await pool.query<Codebase>('SELECT * FROM remote_agent_codebases WHERE id = $1', [
     id,
   ]);
-  return result.rows[0] || null;
+  return result.rows[0] ?? null;
 }
 
 export async function updateCodebaseCommands(
@@ -43,7 +43,7 @@ export async function getCodebaseCommands(
   const result = await pool.query<{
     commands: Record<string, { path: string; description: string }>;
   }>('SELECT commands FROM remote_agent_codebases WHERE id = $1', [id]);
-  return result.rows[0]?.commands || {};
+  return result.rows[0]?.commands ?? {};
 }
 
 export async function registerCommand(
@@ -61,7 +61,7 @@ export async function findCodebaseByRepoUrl(repoUrl: string): Promise<Codebase |
     'SELECT * FROM remote_agent_codebases WHERE repository_url = $1',
     [repoUrl]
   );
-  return result.rows[0] || null;
+  return result.rows[0] ?? null;
 }
 export async function findBestCodebaseForPath(path: string): Promise<Codebase | null> {
   // Find codebases whose default_cwd is a prefix of the given path.
@@ -71,7 +71,7 @@ export async function findBestCodebaseForPath(path: string): Promise<Codebase | 
     'SELECT * FROM remote_agent_codebases WHERE $1 = default_cwd OR $1 LIKE default_cwd || \'/%\' ORDER BY LENGTH(default_cwd) DESC LIMIT 1',
     [path]
   );
-  return result.rows[0] || null;
+  return result.rows[0] ?? null;
 }
 export async function updateCodebaseSandboxMode(
   id: string,

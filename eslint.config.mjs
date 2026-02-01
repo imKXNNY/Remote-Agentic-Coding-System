@@ -10,6 +10,9 @@ export default tseslint.config(
       'dist/**',
       'coverage/**',
       '.agents/examples/**',
+      'docs/**',
+      'webui/**',
+      'test/**',
       'workspace/**',
       '**/*.js', // Ignore JS files (like jest.config.js)
       '*.mjs', // Ignore ESLint config itself

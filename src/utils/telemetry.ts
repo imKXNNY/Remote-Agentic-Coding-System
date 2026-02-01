@@ -23,12 +23,12 @@ export async function logTelemetry(event: TelemetryEvent): Promise<void> {
       [
         event.conversation_id,
         event.assistant_type,
-        event.model_id || null,
-        event.latency_to_first_token_ms || null,
-        event.latency_total_ms || null,
+        event.model_id ?? null,
+        event.latency_to_first_token_ms ?? null,
+        event.latency_total_ms ?? null,
         event.status,
-        event.error_message || null,
-        event.token_count || null
+        event.error_message ?? null,
+        event.token_count ?? null
       ]
     );
   } catch (error) {
