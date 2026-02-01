@@ -132,8 +132,10 @@ export async function handleMessage(
         await platform.sendMessage(conversationId, `✅ ${bootResult.message}`);
       } else if (bootResult.status === 'needs-approval') {
         await platform.sendMessage(conversationId, bootResult.message);
+        return;
       } else if (bootResult.status === 'failed') {
         await platform.sendMessage(conversationId, `❌ ${bootResult.message}`);
+        return;
       }
     }
     const cwd = conversation.cwd ?? codebase?.default_cwd ?? '/workspace';
