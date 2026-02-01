@@ -1,12 +1,13 @@
 import { Router } from 'express';
 import { Octokit } from '@octokit/rest';
+import { asyncHandler } from '../utils/async-handler';
 
 const router = Router();
 
 // Initialize Octokit with the server's token
 // This allows the WebUI to browse issues without forcing every user to provide a token
 const octokit = new Octokit({ 
-  auth: process.env.GITHUB_TOKEN || process.env.GH_TOKEN 
+  auth: process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN 
 });
 
 /**
@@ -14,7 +15,7 @@ const octokit = new Octokit({
  * Fetch open issues for a repository
  * Query params: owner, repo
  */
-router.get('/github/issues', async (req, res) => {
+router.get('/github/issues', asyncHandler(async (req, res) => {
   const owner = req.query.owner as string;
   const repo = req.query.repo as string;
 
@@ -56,6 +57,6 @@ router.get('/github/issues', async (req, res) => {
     console.error('[API] Failed to fetch GitHub issues:', message);
     return res.status(500).json({ error: 'Failed to fetch issues from GitHub' });
   }
-});
+}));
 
 export default router;

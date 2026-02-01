@@ -91,7 +91,9 @@ export class CodexClient implements IAssistantClient {
         });
       }
     } else {
-      console.log(`[Codex] Starting new thread in ${cwd} (Model: ${options?.model || 'default'}, Sandbox: ${options?.sandbox || 'default'})`);
+      const modelLabel = options?.model ?? 'default';
+      const sandboxLabel = options?.sandbox ?? 'default';
+      console.log(`[Codex] Starting new thread in ${cwd} (Model: ${modelLabel}, Sandbox: ${sandboxLabel})`);
       const startThread = codex.startThread.bind(codex) as (options: Record<string, unknown>) => typeof thread;
       thread = startThread({
         workingDirectory: cwd,
@@ -128,9 +130,10 @@ export class CodexClient implements IAssistantClient {
         // Handle turn failed events
         if (event.type === 'turn.failed') {
           console.error('[Codex] Turn failed:', event.error?.message);
+          const failureReason = event.error?.message ?? 'Unknown error';
           yield {
             type: 'system',
-            content: `❌ Turn failed: ${event.error?.message || 'Unknown error'}`,
+            content: `❌ Turn failed: ${failureReason}`,
           };
           break;
         }
@@ -169,7 +172,7 @@ export class CodexClient implements IAssistantClient {
         if (event.type === 'turn.completed') {
           console.log('[Codex] Turn completed');
           // Yield result with thread ID for persistence
-          yield { type: 'result', sessionId: thread.id || undefined };
+          yield { type: 'result', sessionId: thread.id ?? undefined };
           // CRITICAL: Break out of event loop - turn is complete!
           // Without this, the loop waits for stream to end (causes 90s timeout)
           break;
@@ -212,13 +215,12 @@ export class CodexClient implements IAssistantClient {
     let buffer = '';
     
     // Process JSONL line by line
-    if (child.stdout) {
-      for await (const chunk of child.stdout as unknown as AsyncIterable<Buffer>) {
-        buffer += chunk.toString();
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-  
-        for (const line of lines) {
+    for await (const chunk of child.stdout as unknown as AsyncIterable<Buffer>) {
+      buffer += chunk.toString();
+      const lines = buffer.split('\n');
+      buffer = lines.pop() ?? '';
+
+      for (const line of lines) {
         if (!line.trim()) continue;
         try {
           const data = JSON.parse(line) as {
@@ -230,11 +232,12 @@ export class CodexClient implements IAssistantClient {
           };
           // Map JSON events to MessageChunks
           if (data.type === 'assistant_message' && data.text) {
-             yield { type: 'assistant', content: data.text };
+            yield { type: 'assistant', content: data.text };
           } else if (data.type === 'tool_use' || data.type === 'command_execution') {
-             yield { type: 'tool', toolName: data.name || data.command, toolInput: data.input };
+            const resolvedTool = data.name ?? data.command;
+            yield { type: 'tool', toolName: resolvedTool, toolInput: data.input };
           } else if (data.type === 'reasoning' && data.text) {
-             yield { type: 'thinking', content: data.text };
+            yield { type: 'thinking', content: data.text };
           }
         } catch (_e) {
           // If not valid JSON, maybe it's just raw output
@@ -242,7 +245,6 @@ export class CodexClient implements IAssistantClient {
         }
       }
     }
-  }
 
     const code = await new Promise<number>((resolve) => {
       child.on('close', resolve);
@@ -264,7 +266,7 @@ export class CodexClient implements IAssistantClient {
   ): AsyncGenerator<MessageChunk> {
     const { spawn } = await import('child_process');
     
-    console.log(`[Codex] Running CLI with ${attachments.length} attachments`);
+    console.log(`[Codex] Running CLI with ${String(attachments.length)} attachments`);
     
     // Construct args: codex exec "prompt" -i path1 -i path2
     const args = ['exec', prompt];
@@ -305,7 +307,8 @@ export class CodexClient implements IAssistantClient {
     if (code !== 0) {
        yield { type: 'system', content: `⚠️ Codex CLI failed: ${stderr}` };
     } else {
-       yield { type: 'assistant', content: stdout || 'analysis complete.' };
+       const cliOutput = stdout.trim().length > 0 ? stdout : 'analysis complete.';
+       yield { type: 'assistant', content: cliOutput };
     }
   }
 

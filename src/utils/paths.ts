@@ -25,7 +25,7 @@ export async function getWorkspaceRoot(): Promise<string> {
     // Ignore and fall back
   }
 
-  cachedWorkspaceRoot = process.env.WORKSPACE_PATH || './workspace';
+  cachedWorkspaceRoot = process.env.WORKSPACE_PATH ?? './workspace';
   return cachedWorkspaceRoot;
 }
 

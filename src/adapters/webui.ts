@@ -31,7 +31,7 @@ export class WebUIAdapter implements IPlatformAdapter {
   handleConnection(ws: WebSocket, _req: IncomingMessage): void {
     console.log('[WebUI] New connection attempt');
     
-    ws.on('message', async (data: Buffer) => {
+    ws.on('message', (data: Buffer) => {
       try {
         const event = JSON.parse(data.toString()) as WebUIIncomingMessage;
         

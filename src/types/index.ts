@@ -11,6 +11,8 @@ export interface Conversation {
   ai_assistant_type: string;
   model_id: string | null;
   additional_dirs: string[] | null;
+  last_bootstrap_at: Date | null;
+  bootstrap_status: 'pending' | 'running' | 'success' | 'failed' | 'skipped';
   created_at: Date;
   updated_at: Date;
 }

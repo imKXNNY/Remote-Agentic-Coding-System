@@ -13,6 +13,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { join } from 'path';
 import { readdir, stat, readFile } from 'fs/promises';
 import { TelegramAdapter } from './adapters/telegram';
+import { message } from 'telegraf/filters';
 import { TestAdapter } from './adapters/test';
 import { GitHubAdapter } from './adapters/github';
 import { WebUIAdapter } from './adapters/webui';
@@ -23,6 +24,9 @@ import { pool } from './db/connection';
 import { ConversationLockManager } from './utils/conversation-lock';
 import { resolveWorkspacePath } from './utils/paths';
 import { startMcpServer } from './mcp-server';
+import uploadRouter from './routes/upload';
+import githubRouter from './routes/github';
+import { asyncHandler } from './utils/async-handler';
 
 // Extended WebSocket for heartbeat
 interface ExtWebSocket extends WebSocket {
@@ -50,8 +54,10 @@ async function main(): Promise<void> {
   }
 
   // Validate AI assistant credentials (warn if missing, don't fail)
-  const hasClaudeCredentials = process.env.CLAUDE_API_KEY || process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  const hasCodexCredentials = process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN;
+  const claudeApiKey = process.env.CLAUDE_API_KEY?.trim();
+  const claudeOauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim();
+  const hasClaudeCredentials = Boolean(claudeApiKey || claudeOauthToken);
+  const hasCodexCredentials = Boolean(process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN);
 
   if (!hasClaudeCredentials && !hasCodexCredentials) {
     console.error('[App] No AI assistant credentials found. Set Claude or Codex credentials.');
@@ -75,9 +81,19 @@ async function main(): Promise<void> {
   }
 
   // Initialize conversation lock manager
-  const maxConcurrent = parseInt(process.env.MAX_CONCURRENT_CONVERSATIONS || '10');
+  const maxConcurrentRaw = process.env.MAX_CONCURRENT_CONVERSATIONS ?? '10';
+  const parsedMaxConcurrent = Number.parseInt(maxConcurrentRaw, 10);
+  const maxConcurrent =
+    Number.isFinite(parsedMaxConcurrent) && parsedMaxConcurrent > 0
+      ? parsedMaxConcurrent
+      : 10;
+  if (maxConcurrent !== parsedMaxConcurrent) {
+    console.warn(
+      `[App] Invalid MAX_CONCURRENT_CONVERSATIONS="${maxConcurrentRaw}". Falling back to ${String(maxConcurrent)}.`
+    );
+  }
   const lockManager = new ConversationLockManager(maxConcurrent);
-  console.log(`[App] Lock manager initialized (max concurrent: ${maxConcurrent})`);
+  console.log(`[App] Lock manager initialized (max concurrent: ${String(maxConcurrent)})`);
 
   // Initialize test adapter
   const testAdapter = new TestAdapter();
@@ -95,12 +111,17 @@ async function main(): Promise<void> {
   // Setup Express and HTTP server
   const app = express();
   const server = createServer(app);
-  const port = process.env.PORT || 3000;
+  const portRaw = process.env.PORT ?? '3000';
+  const parsedPort = Number.parseInt(portRaw, 10);
+  const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 3000;
+  if (port !== parsedPort) {
+    console.warn(`[App] Invalid PORT="${portRaw}". Falling back to ${String(port)}.`);
+  }
 
   // GitHub webhook endpoint (must use raw body for signature verification)
   // IMPORTANT: Register BEFORE express.json() to prevent body parsing
   if (github) {
-    app.post('/webhooks/github', express.raw({ type: 'application/json' }), async (req, res) => {
+    app.post('/webhooks/github', express.raw({ type: 'application/json' }), asyncHandler(async (req, res) => {
       try {
         const signature = req.headers['x-hub-signature-256'] as string;
         if (!signature) {
@@ -120,7 +141,7 @@ async function main(): Promise<void> {
         console.error('[GitHub] Webhook endpoint error:', error);
         res.status(500).json({ error: 'Internal server error' });
       }
-    });
+    }));
     console.log('[Express] GitHub webhook endpoint registered');
   }
 
@@ -132,14 +153,14 @@ async function main(): Promise<void> {
     res.json({ status: 'ok' });
   });
 
-  app.get('/health/db', async (_req, res) => {
+  app.get('/health/db', asyncHandler(async (_req, res) => {
     try {
       await pool.query('SELECT 1');
       res.json({ status: 'ok', database: 'connected' });
     } catch (_error) {
       res.status(500).json({ status: 'error', database: 'disconnected' });
     }
-  });
+  }));
 
   app.get('/health/concurrency', (_req, res) => {
     try {
@@ -154,9 +175,11 @@ async function main(): Promise<void> {
   });
 
   // Test adapter endpoints
-  app.post('/test/message', async (req, res) => {
+  app.post('/test/message', asyncHandler(async (req, res) => {
     try {
-      const { conversationId, message } = req.body;
+      const body = req.body as { conversationId?: string; message?: string };
+      const conversationId = body.conversationId;
+      const message = body.message;
       if (!conversationId || !message) {
         res.status(400).json({ error: 'conversationId and message required' });
         return;
@@ -178,7 +201,7 @@ async function main(): Promise<void> {
       console.error('[Test] Endpoint error:', error);
       res.status(500).json({ error: 'Internal server error' });
     }
-  });
+  }));
 
   app.get('/test/messages/:conversationId', (req, res) => {
     const messages = testAdapter.getSentMessages(req.params.conversationId);
@@ -194,7 +217,7 @@ async function main(): Promise<void> {
 
   // Basic Auth Middleware
   const authMiddleware = (req: express.Request, res: express.Response, next: express.NextFunction): void => {
-    const user = process.env.WEBUI_USER || 'admin';
+    const user = process.env.WEBUI_USER ?? 'admin';
     const pass = process.env.WEBUI_PASSWORD;
 
     if (!pass && process.env.NODE_ENV === 'production') {
@@ -216,8 +239,8 @@ async function main(): Promise<void> {
       return;
     }
 
-    const authHeader = req.headers.authorization || '';
-    const b64auth = authHeader.split(' ')[1] || '';
+    const authHeader = req.headers.authorization ?? '';
+    const b64auth = authHeader.split(' ')[1] ?? '';
     if (!b64auth) {
       res.set('WWW-Authenticate', 'Basic realm="Remote Agent WebUI"');
       res.status(401).send('Authentication required.');
@@ -240,15 +263,13 @@ async function main(): Promise<void> {
   const webui = new WebUIAdapter();
 
   // Register Upload Route
-  const uploadRouter = (await import('./routes/upload')).default;
   app.use('/api', authMiddleware, uploadRouter);
 
   // Register GitHub Route
-  const githubRouter = (await import('./routes/github')).default;
   app.use('/api', authMiddleware, githubRouter);
 
   // API Routes (Protected)
-  app.get('/api/conversations', authMiddleware, async (_req, res) => {
+  app.get('/api/conversations', authMiddleware, asyncHandler(async (_req, res) => {
     try {
       const result = await pool.query(`
         SELECT 
@@ -269,9 +290,9 @@ async function main(): Promise<void> {
        console.error('[WebUI] Failed to fetch conversations:', error);
        res.status(500).json({ error: 'Failed to fetch conversations' });
     }
-  });
+  }));
 
-  app.get('/api/codebases', authMiddleware, async (_req, res) => {
+  app.get('/api/codebases', authMiddleware, asyncHandler(async (_req, res) => {
     try {
       const result = await pool.query('SELECT * FROM remote_agent_codebases ORDER BY name ASC');
       res.json(result.rows);
@@ -279,9 +300,9 @@ async function main(): Promise<void> {
       console.error('[WebUI] Failed to fetch codebases:', error);
       res.status(500).json({ error: 'Failed to fetch codebases' });
     }
-  });
+  }));
 
-  app.get('/api/conversations/:id/messages', authMiddleware, async (req, res) => {
+  app.get('/api/conversations/:id/messages', authMiddleware, asyncHandler(async (req, res) => {
     try {
       const messages = await messageDb.getMessages(req.params.id);
       res.json(messages);
@@ -289,9 +310,9 @@ async function main(): Promise<void> {
       console.error('[WebUI] Failed to fetch messages:', error);
       res.status(500).json({ error: 'Failed to fetch messages' });
     }
-  });
+  }));
 
-  app.get('/api/stats', authMiddleware, async (_req, res) => {
+  app.get('/api/stats', authMiddleware, asyncHandler(async (_req, res) => {
     try {
       const { getStats } = await import('./utils/telemetry');
       const stats = await getStats();
@@ -300,11 +321,14 @@ async function main(): Promise<void> {
       console.error('[WebUI] Failed to fetch stats:', error);
       res.status(500).json({ error: 'Failed to fetch stats' });
     }
-  });
+  }));
 
-  app.get('/api/conversations/:id/commands', authMiddleware, async (req, res) => {
+  app.get('/api/conversations/:id/commands', authMiddleware, asyncHandler(async (req, res) => {
     try {
-      const convResult = await pool.query('SELECT codebase_id FROM remote_agent_conversations WHERE id = $1', [req.params.id]);
+      const convResult = await pool.query<{ codebase_id: string | null }>(
+        'SELECT codebase_id FROM remote_agent_conversations WHERE id = $1',
+        [req.params.id]
+      );
       const codebaseId = convResult.rows[0]?.codebase_id;
       
       if (!codebaseId) {
@@ -318,11 +342,12 @@ async function main(): Promise<void> {
       console.error('[WebUI] Failed to fetch commands:', error);
       res.status(500).json({ error: 'Failed to fetch commands' });
     }
-  });
+  }));
 
-  app.get('/api/files', authMiddleware, async (req, res) => {
+  app.get('/api/files', authMiddleware, asyncHandler(async (req, res) => {
     try {
-      const relPath = (req.query.path as string) || '';
+      const relPathParam = req.query.path;
+      const relPath = typeof relPathParam === 'string' ? relPathParam : '';
       
       if (relPath.includes('..')) {
         res.status(400).json({ error: 'Invalid path' });
@@ -348,11 +373,12 @@ async function main(): Promise<void> {
     } catch (_error) {
       res.status(500).json({ error: 'Failed to list files' });
     }
-  });
+  }));
 
-  app.get('/api/files/content', authMiddleware, async (req, res) => {
+  app.get('/api/files/content', authMiddleware, asyncHandler(async (req, res) => {
     try {
-       const relPath = (req.query.path as string) || '';
+       const relPathParam = req.query.path;
+       const relPath = typeof relPathParam === 'string' ? relPathParam : '';
 
        if (relPath.includes('..')) {
          res.status(400).json({ error: 'Invalid path' });
@@ -371,7 +397,7 @@ async function main(): Promise<void> {
     } catch (_error) {
        res.status(500).json({ error: 'Failed to read file' });
     }
-  });
+  }));
 
   // Serve Frontend Static Files
   app.use(authMiddleware, express.static('webui/dist'));
@@ -390,19 +416,22 @@ async function main(): Promise<void> {
   });
   
   server.on('upgrade', (req, _socket, _head) => {
-    console.log(`[WebSocket] Upgrade requested for: ${req.url} from ${req.socket.remoteAddress}`);
+    const requestedUrl = req.url ?? '';
+    const remoteAddress = req.socket.remoteAddress ?? 'unknown';
+    console.log(`[WebSocket] Upgrade requested for: ${requestedUrl} from ${remoteAddress}`);
   });
 
   // Verify Auth on Connection (Upgrade)
   wss.on('connection', (ws, req) => {
      console.log('[WebSocket] Connection established. Verifying auth...');
      
-     let b64auth = (req.headers.authorization || '').split(' ')[1] || '';
+     const headerAuth = req.headers.authorization ?? '';
+     let b64auth = headerAuth.split(' ')[1] ?? '';
      
      if (!b64auth) {
         try {
-          const url = new URL(req.url || '', `http://${req.headers.host || 'localhost'}`);
-          b64auth = url.searchParams.get('token') || '';
+          const url = new URL(req.url ?? '', `http://${req.headers.host ?? 'localhost'}`);
+          b64auth = url.searchParams.get('token') ?? '';
           if (b64auth) console.log('[WebSocket] Auth token found in query params');
         } catch (e) {
           console.error('[WebSocket] Failed to parse URL for token:', e);
@@ -420,7 +449,7 @@ async function main(): Promise<void> {
        }
      }
      
-     const user = process.env.WEBUI_USER || 'admin';
+     const user = process.env.WEBUI_USER ?? 'admin';
      const pass = process.env.WEBUI_PASSWORD;
      
      if (!pass) {
@@ -482,15 +511,26 @@ async function main(): Promise<void> {
   });
 
   server.listen(port, () => {
-    console.log(`[Express] Server listening on port ${port}`);
+    console.log(`[Express] Server listening on port ${String(port)}`);
   });
 
   // Initialize platform adapter (Telegram)
-  const streamingMode = (process.env.TELEGRAM_STREAMING_MODE || 'stream') as 'stream' | 'batch';
-  const telegram = new TelegramAdapter(process.env.TELEGRAM_BOT_TOKEN!, streamingMode);
+  const streamingModeRaw = process.env.TELEGRAM_STREAMING_MODE ?? 'stream';
+  const streamingMode: 'stream' | 'batch' =
+    streamingModeRaw === 'batch' ? 'batch' : 'stream';
+  if (streamingModeRaw !== 'stream' && streamingModeRaw !== 'batch') {
+    console.warn(
+      `[App] Invalid TELEGRAM_STREAMING_MODE="${streamingModeRaw}". Falling back to "stream".`
+    );
+  }
+  const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!telegramToken) {
+    throw new Error('Missing TELEGRAM_BOT_TOKEN');
+  }
+  const telegram = new TelegramAdapter(telegramToken, streamingMode);
 
   // Handle text messages
-  telegram.getBot().on('text', async ctx => {
+  telegram.getBot().on(message('text'), async ctx => {
     const conversationId = telegram.getConversationId(ctx);
     const message = ctx.message.text;
 

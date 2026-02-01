@@ -1,0 +1,14 @@
+#!/bin/bash
+# Example setup script for Remote Agentic Coding System
+echo "🚀 Initializing project environment..."
+
+# 1. Install dependencies
+if [ -f "package.json" ]; then
+    npm install
+fi
+
+# 2. Run custom init tasks
+# touch .env.local
+# npm run db:migrate
+
+echo "✅ Project is ready for AI collaboration."

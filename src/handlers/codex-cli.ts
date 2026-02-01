@@ -44,16 +44,19 @@ export async function runCodexReview(options: CodexReviewOptions): Promise<strin
     });
 
     child.stderr.on('data', (data: Buffer) => {
-      errorOutput += data.toString();
+      const text = data.toString();
+      errorOutput += text;
       // Optional: Stream stderr to console for debugging
-      console.error(`[Codex CLI stderr]: ${data}`);
+      console.error(`[Codex CLI stderr]: ${text}`);
     });
 
     child.on('close', (code: number | null) => {
       if (code !== 0) {
-        reject(new Error(`Codex review failed with code ${code}: ${errorOutput}`));
+        const exitCode = String(code ?? 'unknown');
+        reject(new Error(`Codex review failed with code ${exitCode}: ${errorOutput}`));
       } else {
-        resolve(output || 'Review completed but returned no output.');
+        const reviewOutput = output.length > 0 ? output : 'Review completed but returned no output.';
+        resolve(reviewOutput);
       }
     });
 

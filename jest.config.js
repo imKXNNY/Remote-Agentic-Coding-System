@@ -10,6 +10,9 @@ module.exports = {
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
   verbose: true,
-  // Transform ESM modules from @octokit
-  transformIgnorePatterns: ['node_modules/(?!(@octokit)/)'],
+  // Transform ESM modules from @octokit and @anthropic-ai packages
+  transformIgnorePatterns: ['node_modules/(?!(@octokit|@anthropic-ai)/)'],
+  moduleNameMapper: {
+    '@anthropic-ai/claude-agent-sdk': '<rootDir>/test/__mocks__/claude-agent-sdk.ts',
+  },
 };

@@ -11,6 +11,8 @@ import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
 import { runCodexReview } from './codex-cli';
+import * as bootstrap from '../utils/bootstrap';
+import { getAssistantClient } from '../clients/factory';
 
 const execAsync = promisify(exec);
 
@@ -32,7 +34,7 @@ async function findMarkdownFilesRecursive(
       continue;
     }
 
-    if (entry.isDirectory?.()) {
+    if (entry.isDirectory()) {
       // Recurse into subdirectory
       const subResults = await findMarkdownFilesRecursive(rootPath, join(relativePath, entry.name));
       results.push(...subResults);
@@ -50,7 +52,7 @@ async function findMarkdownFilesRecursive(
 
 export function parseCommand(text: string): { command: string; args: string[] } {
   // Match quoted strings or non-whitespace sequences
-  const matches = text.match(/"[^"]+"|'[^']+'|\S+/g) || [];
+  const matches = text.match(/"[^"]+"|'[^']+'|\S+/g) ?? [];
 
   if (matches.length === 0 || !matches[0]) {
     return { command: '', args: [] };
@@ -103,6 +105,7 @@ Codebase:
 Session:
   /status - Show state
   /reset - Clear session
+  /bootstrap [force] - Auto-provision project environment
   /help - Show help
   /setmodel <id> - Set assistant model (GPT-5, etc.)
   /setsandbox <mode> - Set sandbox (read-only, workspace-write, danger-full-access)`,
@@ -147,7 +150,7 @@ Session:
       const newDir = join('/workspace', args[0]);
       try {
         await access(newDir);
-        const currentDirs = conversation.additional_dirs || [];
+        const currentDirs = conversation.additional_dirs ?? [];
         if (currentDirs.includes(newDir)) {
            return { success: true, message: `Directory already exists in list: ${newDir}` };
         }
@@ -155,7 +158,7 @@ Session:
         await db.updateConversation(conversation.id, { additional_dirs: updatedDirs });
         return {
           success: true,
-          message: `Added additional directory: ${newDir}\n\nCodex now has access to:\n- ${conversation.cwd || '(main)'}\n${updatedDirs.map(d => `- ${d}`).join('\n')}`,
+          message: `Added additional directory: ${newDir}\n\nCodex now has access to:\n- ${conversation.cwd ?? '(main)'}\n${updatedDirs.map(d => `- ${d}`).join('\n')}`,
           modified: true,
         };
       } catch (_error) {
@@ -172,6 +175,24 @@ Session:
       };
     }
 
+    case 'bootstrap': {
+      if (!conversation.codebase_id) {
+        return { success: false, message: 'No codebase context. Use /clone or /setcwd first.' };
+      }
+      const force = args[0] === 'force';
+      const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
+      if (!codebase) return { success: false, message: 'Codebase not found.' };
+
+      const aiClient = getAssistantClient(conversation.ai_assistant_type);
+      const result = await bootstrap.runBootstrap(conversation, codebase, aiClient, force);
+      
+      return {
+        success: result.status === 'success' || result.status === 'skipped',
+        message: result.message,
+        modified: true
+      };
+    }
+
     case 'codex-exec': {
       if (args.length === 0) {
         return { success: false, message: 'Usage: /codex-exec <prompt>' };
@@ -184,7 +205,7 @@ Session:
       const { getAssistantClient } = await import('../clients/factory');
       const aiClient = getAssistantClient('codex');
       const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
-      const cwd = conversation.cwd || codebase?.default_cwd || '/workspace';
+      const cwd = conversation.cwd ?? codebase?.default_cwd ?? '/workspace';
       
       try {
         let output = '';
@@ -192,7 +213,8 @@ Session:
           if (chunk.type === 'assistant' && chunk.content) {
             output += chunk.content;
           } else if (chunk.type === 'tool' ) {
-            output += `\n[Tool: ${chunk.toolName}]\n`;
+            const toolLabel = chunk.toolName ?? 'unknown';
+            output += `\n[Tool: ${toolLabel}]\n`;
           }
         }
         return {
@@ -253,7 +275,7 @@ Session:
         msg += '\n\nNo codebase configured. Use /clone <repo-url> to get started.';
       }
 
-      msg += `\n\nCurrent Working Directory: ${conversation.cwd || 'Not set'}`;
+      msg += `\n\nCurrent Working Directory: ${conversation.cwd ?? 'Not set'}`;
 
       if (conversation.additional_dirs && conversation.additional_dirs.length > 0) {
         msg += `\nAdditional Directories:\n${conversation.additional_dirs.map(d => `- ${d}`).join('\n')}`;
@@ -270,7 +292,7 @@ Session:
     case 'getcwd':
       return {
         success: true,
-        message: `Current working directory: ${conversation.cwd || 'Not set'}`,
+        message: `Current working directory: ${conversation.cwd ?? 'Not set'}`,
       };
 
     case 'setcwd': {
@@ -286,10 +308,12 @@ Session:
         cwd: string;
         codebase_id?: string | null;
         ai_assistant_type?: string;
+        bootstrap_status?: 'pending';
       } = { cwd: newCwd };
       if (codebase) {
         updates.codebase_id = codebase.id;
         updates.ai_assistant_type = codebase.ai_assistant_type;
+        updates.bootstrap_status = 'pending';
         console.log(`[Command] Switched codebase context to: ${codebase.name}`);
       } else {
         // Clear codebase context if moving outside known repos
@@ -337,7 +361,7 @@ Session:
       }
 
       const repoUrl: string = args[0];
-      const repoName = repoUrl.split('/').pop()?.replace('.git', '') || 'unknown';
+      const repoName = repoUrl.split('/').pop()?.replace('.git', '') ?? 'unknown';
       // Inside Docker container, always use /workspace (mounted volume)
       const workspacePath = '/workspace';
       const targetPath = `${workspacePath}/${repoName}`;
@@ -408,6 +432,7 @@ Session:
         await db.updateConversation(conversation.id, {
           codebase_id: codebase.id,
           cwd: targetPath,
+          bootstrap_status: 'pending'
         });
 
         // Reset session when cloning a new repository
@@ -460,7 +485,7 @@ Session:
 
       const [commandName, commandPath, ...textParts] = args;
       const commandText = textParts.join(' ');
-      const fullPath = join(conversation.cwd || '/workspace', commandPath);
+      const fullPath = join(conversation.cwd ?? '/workspace', commandPath);
 
       try {
         if (commandText) {
@@ -492,7 +517,7 @@ Session:
       }
 
       const folderPath = args.join(' ');
-      const fullPath = join(conversation.cwd || '/workspace', folderPath);
+      const fullPath = join(conversation.cwd ?? '/workspace', folderPath);
 
       try {
         // Recursively find all .md files
@@ -516,7 +541,7 @@ Session:
 
         return {
           success: true,
-          message: `Loaded ${markdownFiles.length} commands recursively: ${markdownFiles.map(f => f.commandName).join(', ')}`,
+          message: `Loaded ${String(markdownFiles.length)} commands recursively: ${markdownFiles.map(f => f.commandName).join(', ')}`,
         };
       } catch (error) {
         const err = error as Error;
@@ -531,7 +556,7 @@ Session:
       }
 
       const codebase = await codebaseDb.getCodebase(conversation.codebase_id);
-      const commands = codebase?.commands || {};
+      const commands = codebase?.commands ?? {};
 
       if (!Object.keys(commands).length) {
         return {
@@ -561,7 +586,7 @@ Session:
           };
         }
 
-        const currentCwd = conversation.cwd || '';
+        const currentCwd = conversation.cwd ?? '';
         let msg = 'Workspace Repositories:\n\n';
 
         folders.forEach(folder => {

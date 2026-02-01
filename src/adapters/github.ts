@@ -160,7 +160,7 @@ export class GitHubAdapter implements IPlatformAdapter {
 
     // issue_comment (covers both issues and PRs)
     if (event.comment) {
-      const number = event.issue?.number || event.pull_request?.number;
+      const number = event.issue?.number ?? event.pull_request?.number;
       if (!number) return null;
       return {
         owner,
@@ -179,7 +179,7 @@ export class GitHubAdapter implements IPlatformAdapter {
         owner,
         repo,
         number: event.issue.number,
-        comment: event.issue.body || '',
+        comment: event.issue.body ?? '',
         eventType: 'issue',
         issue: event.issue,
       };
@@ -191,7 +191,7 @@ export class GitHubAdapter implements IPlatformAdapter {
         owner,
         repo,
         number: event.pull_request.number,
-        comment: event.pull_request.body || '',
+        comment: event.pull_request.body ?? '',
         eventType: 'pull_request',
         pullRequest: event.pull_request,
       };
