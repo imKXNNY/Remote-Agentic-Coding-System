@@ -513,7 +513,14 @@ async function main(): Promise<void> {
   });
 
   // Initialize platform adapter (Telegram)
-  const streamingMode = (process.env.TELEGRAM_STREAMING_MODE ?? 'stream') as 'stream' | 'batch';
+  const streamingModeRaw = process.env.TELEGRAM_STREAMING_MODE ?? 'stream';
+  const streamingMode: 'stream' | 'batch' =
+    streamingModeRaw === 'batch' ? 'batch' : 'stream';
+  if (streamingModeRaw !== 'stream' && streamingModeRaw !== 'batch') {
+    console.warn(
+      `[App] Invalid TELEGRAM_STREAMING_MODE="${streamingModeRaw}". Falling back to "stream".`
+    );
+  }
   const telegramToken = process.env.TELEGRAM_BOT_TOKEN;
   if (!telegramToken) {
     throw new Error('Missing TELEGRAM_BOT_TOKEN');
