@@ -54,12 +54,9 @@ async function main(): Promise<void> {
   }
 
   // Validate AI assistant credentials (warn if missing, don't fail)
-  const hasClaudeCredentials =
-    (process.env.CLAUDE_API_KEY && process.env.CLAUDE_API_KEY.trim() !== '')
-      ? process.env.CLAUDE_API_KEY
-      : (process.env.CLAUDE_CODE_OAUTH_TOKEN && process.env.CLAUDE_CODE_OAUTH_TOKEN.trim() !== '')
-        ? process.env.CLAUDE_CODE_OAUTH_TOKEN
-        : '';
+  const claudeApiKey = process.env.CLAUDE_API_KEY?.trim();
+  const claudeOauthToken = process.env.CLAUDE_CODE_OAUTH_TOKEN?.trim();
+  const hasClaudeCredentials = Boolean(claudeApiKey || claudeOauthToken);
   const hasCodexCredentials = Boolean(process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN);
 
   if (!hasClaudeCredentials && !hasCodexCredentials) {
@@ -114,7 +111,12 @@ async function main(): Promise<void> {
   // Setup Express and HTTP server
   const app = express();
   const server = createServer(app);
-  const port = Number(process.env.PORT ?? 3000);
+  const portRaw = process.env.PORT ?? '3000';
+  const parsedPort = Number.parseInt(portRaw, 10);
+  const port = Number.isFinite(parsedPort) && parsedPort > 0 ? parsedPort : 3000;
+  if (port !== parsedPort) {
+    console.warn(`[App] Invalid PORT="${portRaw}". Falling back to ${String(port)}.`);
+  }
 
   // GitHub webhook endpoint (must use raw body for signature verification)
   // IMPORTANT: Register BEFORE express.json() to prevent body parsing
