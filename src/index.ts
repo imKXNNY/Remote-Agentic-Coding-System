@@ -84,7 +84,17 @@ async function main(): Promise<void> {
   }
 
   // Initialize conversation lock manager
-  const maxConcurrent = parseInt(process.env.MAX_CONCURRENT_CONVERSATIONS ?? '10', 10);
+  const maxConcurrentRaw = process.env.MAX_CONCURRENT_CONVERSATIONS ?? '10';
+  const parsedMaxConcurrent = Number.parseInt(maxConcurrentRaw, 10);
+  const maxConcurrent =
+    Number.isFinite(parsedMaxConcurrent) && parsedMaxConcurrent > 0
+      ? parsedMaxConcurrent
+      : 10;
+  if (maxConcurrent !== parsedMaxConcurrent) {
+    console.warn(
+      `[App] Invalid MAX_CONCURRENT_CONVERSATIONS="${maxConcurrentRaw}". Falling back to ${String(maxConcurrent)}.`
+    );
+  }
   const lockManager = new ConversationLockManager(maxConcurrent);
   console.log(`[App] Lock manager initialized (max concurrent: ${String(maxConcurrent)})`);
 
