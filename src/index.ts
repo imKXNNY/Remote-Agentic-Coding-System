@@ -54,8 +54,13 @@ async function main(): Promise<void> {
   }
 
   // Validate AI assistant credentials (warn if missing, don't fail)
-  const hasClaudeCredentials = process.env.CLAUDE_API_KEY ?? process.env.CLAUDE_CODE_OAUTH_TOKEN;
-  const hasCodexCredentials = process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN;
+  const hasClaudeCredentials =
+    (process.env.CLAUDE_API_KEY && process.env.CLAUDE_API_KEY.trim() !== '')
+      ? process.env.CLAUDE_API_KEY
+      : (process.env.CLAUDE_CODE_OAUTH_TOKEN && process.env.CLAUDE_CODE_OAUTH_TOKEN.trim() !== '')
+        ? process.env.CLAUDE_CODE_OAUTH_TOKEN
+        : '';
+  const hasCodexCredentials = Boolean(process.env.CODEX_ID_TOKEN && process.env.CODEX_ACCESS_TOKEN);
 
   if (!hasClaudeCredentials && !hasCodexCredentials) {
     console.error('[App] No AI assistant credentials found. Set Claude or Codex credentials.');
