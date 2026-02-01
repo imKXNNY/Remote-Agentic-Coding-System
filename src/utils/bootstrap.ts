@@ -89,6 +89,13 @@ export async function runBootstrap(
   }
 
   const cwd = conversation.cwd ?? codebase.default_cwd;
+  if (!cwd) {
+    console.warn('[Bootstrap] No working directory configured for bootstrap.');
+    return {
+      status: 'failed',
+      message: 'Bootstrap aborted: no working directory configured. Use /setcwd to set one.',
+    };
+  }
   const setupCommands = await detectSetup(cwd);
 
   if (setupCommands.length === 0) {
