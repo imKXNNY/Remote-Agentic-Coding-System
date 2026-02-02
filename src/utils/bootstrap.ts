@@ -10,6 +10,14 @@ export interface ProjectRecipe {
   tools?: string[];
 }
 
+const BOOTSTRAP_RESULT_REGEX = /BOOTSTRAP_RESULT\s*:\s*(success|failed)/i;
+
+function parseBootstrapResult(text: string): 'success' | 'failed' | null {
+  const match = BOOTSTRAP_RESULT_REGEX.exec(text);
+  if (!match?.[1]) return null;
+  return match[1].toLowerCase() === 'success' ? 'success' : 'failed';
+}
+
 /**
  * Utility to check if a file or directory exists
  */
@@ -113,50 +121,34 @@ export async function runBootstrap(
   try {
     // We use a high-level "exec" prompt rather than SDK thread for setup 
     // to avoid polluting the chat history with installation logs
-    const prompt = `Please run the following project setup commands and confirm when finished:\n\`\`\`bash\n${setupCommands.join('\n')}\n\`\`\``;
+    const prompt = `Run these project setup commands:\n\`\`\`bash\n${setupCommands.join('\n')}\n\`\`\`\n\nWhen done, respond with an explicit marker line:\nBOOTSTRAP_RESULT: success\nor\nBOOTSTRAP_RESULT: failed\n\nOptional: add one short reason on the next line.`;
     
     // We use the AI client to execute these in the same sandbox
     // Note: We don't save these to message history!
-    let success = false;
-    let failure = false;
+    let explicitResult: 'success' | 'failed' | null = null;
+    let assistantTranscript = '';
+    let lastAssistantChunk = '';
     for await (const chunk of aiClient.sendQuery(prompt, cwd, undefined, undefined, {
         sandbox: codebase.sandbox_mode,
         outputFormat: 'text' 
     })) {
         if (chunk.type !== 'assistant' || !chunk.content) continue;
-        const normalized = chunk.content.toLowerCase();
-
-        // Flag obvious failure words
-        if (
-          normalized.includes('error') ||
-          normalized.includes('failed') ||
-          normalized.includes('failure') ||
-          normalized.includes('not successful') ||
-          normalized.includes('exception') ||
-          normalized.includes('finished with errors')
-        ) {
-          failure = true;
-        }
-
-        // Mark success only when positive language appears without failure terms
-        const positiveMatch =
-          normalized.includes('success') ||
-          normalized.includes('completed successfully') ||
-          normalized.includes('installation complete') ||
-          normalized.includes('setup complete') ||
-          normalized.includes('ready to go');
-
-        if (positiveMatch && !failure) {
-          success = true;
-        }
+        lastAssistantChunk = chunk.content;
+        assistantTranscript += chunk.content;
+        explicitResult = parseBootstrapResult(assistantTranscript) ?? explicitResult;
     }
 
-    if (failure || !success) {
-      console.warn('[Bootstrap] Setup finished without an explicit success confirmation.');
+    if (explicitResult !== 'success') {
+      if (explicitResult === 'failed') {
+        console.warn('[Bootstrap] Setup reported explicit failure marker.');
+      } else {
+        const preview = lastAssistantChunk.trim().slice(0, 500) || '(no assistant output)';
+        console.warn(`[Bootstrap] Setup finished without BOOTSTRAP_RESULT marker. Last assistant chunk: ${preview}`);
+      }
       await db.updateConversation(conversation.id, { bootstrap_status: 'failed' });
       return {
         status: 'failed',
-        message: 'Provisioning finished without confirmation. Please check logs and retry /bootstrap force.',
+        message: 'Provisioning did not return BOOTSTRAP_RESULT: success. Please check logs and retry /bootstrap force.',
       };
     }
 
