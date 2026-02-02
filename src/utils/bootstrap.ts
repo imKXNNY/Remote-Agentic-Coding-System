@@ -1,5 +1,6 @@
 import { stat } from 'fs/promises';
 import { join } from 'path';
+import { createHash } from 'crypto';
 import { Conversation, Codebase, IAssistantClient } from '../types';
 import * as db from '../db/conversations';
 
@@ -8,6 +9,45 @@ export interface ProjectRecipe {
   setup: string[];
   env?: Record<string, string>;
   tools?: string[];
+}
+
+const BOOTSTRAP_RESULT_REGEX = /BOOTSTRAP_RESULT\s*:\s*(success|failed)/i;
+
+/**
+ * Extracts an explicit bootstrap result marker from assistant output.
+ *
+ * @param text - Assistant output to search for a `BOOTSTRAP_RESULT: <value>` marker
+ * @returns `success` if the marker indicates success, `failed` if it indicates failure, `null` if no marker is found
+ */
+function parseBootstrapResult(text: string): 'success' | 'failed' | null {
+  const matches = [...text.matchAll(new RegExp(BOOTSTRAP_RESULT_REGEX.source, 'gi'))];
+  const last = matches[matches.length - 1];
+  if (!last?.[1]) return null;
+  return last[1].toLowerCase() === 'success' ? 'success' : 'failed';
+}
+
+function logBootstrapOutputDiagnostics(
+  explicitResult: 'success' | 'failed' | null,
+  lastAssistantChunk: string
+): void {
+  const trimmed = lastAssistantChunk.trim();
+  const length = trimmed.length;
+  const hashPrefix = createHash('sha256').update(trimmed).digest('hex').slice(0, 12);
+  const debugEnabled = process.env.DEBUG_BOOTSTRAP_OUTPUT === 'true';
+
+  if (explicitResult === 'failed') {
+    console.warn(
+      `[Bootstrap] Setup reported explicit failure marker. output_length=${String(length)} output_sha256_prefix=${hashPrefix}`
+    );
+  } else {
+    console.warn(
+      `[Bootstrap] Setup finished without BOOTSTRAP_RESULT marker. output_length=${String(length)} output_sha256_prefix=${hashPrefix}`
+    );
+  }
+
+  if (debugEnabled && length > 0) {
+    console.warn(`[Bootstrap] DEBUG_BOOTSTRAP_OUTPUT=true last assistant chunk: ${trimmed.slice(0, 2000)}`);
+  }
 }
 
 /**
@@ -66,7 +106,15 @@ export async function detectSetup(cwd: string): Promise<string[]> {
 }
 
 /**
- * Executes the bootstrap process for a conversation
+ * Provision the conversation's working directory by detecting and running required setup commands, updating the conversation's bootstrap status.
+ *
+ * Detects necessary setup commands in the conversation's working directory, requests the assistant client to execute them inside the codebase sandbox (the assistant must emit an explicit `BOOTSTRAP_RESULT: success` or `BOOTSTRAP_RESULT: failed` marker), and persists bootstrap status and timestamp to the conversation record.
+ *
+ * @param conversation - Conversation record containing id, cwd, and current bootstrap_status
+ * @param codebase - Codebase configuration used to determine sandbox mode and default working directory
+ * @param aiClient - Assistant client used to execute setup commands in the codebase sandbox
+ * @param force - When true, bypasses early skips and danger-mode approval checks
+ * @returns An object with `status` set to one of `success`, `failed`, `skipped`, or `needs-approval`, and a human-readable `message` describing the outcome
  */
 export async function runBootstrap(
   conversation: Conversation,
@@ -113,50 +161,29 @@ export async function runBootstrap(
   try {
     // We use a high-level "exec" prompt rather than SDK thread for setup 
     // to avoid polluting the chat history with installation logs
-    const prompt = `Please run the following project setup commands and confirm when finished:\n\`\`\`bash\n${setupCommands.join('\n')}\n\`\`\``;
+    const prompt = `Run these project setup commands:\n\`\`\`bash\n${setupCommands.join('\n')}\n\`\`\`\n\nWhen done, respond with an explicit marker line:\nBOOTSTRAP_RESULT: success\nor\nBOOTSTRAP_RESULT: failed\n\nOptional: add one short reason on the next line.`;
     
     // We use the AI client to execute these in the same sandbox
     // Note: We don't save these to message history!
-    let success = false;
-    let failure = false;
+    let explicitResult: 'success' | 'failed' | null = null;
+    let assistantTranscript = '';
+    let lastAssistantChunk = '';
     for await (const chunk of aiClient.sendQuery(prompt, cwd, undefined, undefined, {
         sandbox: codebase.sandbox_mode,
         outputFormat: 'text' 
     })) {
         if (chunk.type !== 'assistant' || !chunk.content) continue;
-        const normalized = chunk.content.toLowerCase();
-
-        // Flag obvious failure words
-        if (
-          normalized.includes('error') ||
-          normalized.includes('failed') ||
-          normalized.includes('failure') ||
-          normalized.includes('not successful') ||
-          normalized.includes('exception') ||
-          normalized.includes('finished with errors')
-        ) {
-          failure = true;
-        }
-
-        // Mark success only when positive language appears without failure terms
-        const positiveMatch =
-          normalized.includes('success') ||
-          normalized.includes('completed successfully') ||
-          normalized.includes('installation complete') ||
-          normalized.includes('setup complete') ||
-          normalized.includes('ready to go');
-
-        if (positiveMatch && !failure) {
-          success = true;
-        }
+        lastAssistantChunk = chunk.content;
+        assistantTranscript += chunk.content;
+        explicitResult = parseBootstrapResult(assistantTranscript) ?? explicitResult;
     }
 
-    if (failure || !success) {
-      console.warn('[Bootstrap] Setup finished without an explicit success confirmation.');
+    if (explicitResult !== 'success') {
+      logBootstrapOutputDiagnostics(explicitResult, lastAssistantChunk);
       await db.updateConversation(conversation.id, { bootstrap_status: 'failed' });
       return {
         status: 'failed',
-        message: 'Provisioning finished without confirmation. Please check logs and retry /bootstrap force.',
+        message: 'Provisioning did not return BOOTSTRAP_RESULT: success. Please check logs and retry /bootstrap force.',
       };
     }
 

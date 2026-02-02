@@ -9,6 +9,7 @@ import {
 import { handleMessage } from './orchestrator/orchestrator';
 import { IPlatformAdapter } from './types';
 import { pool } from './db/connection';
+import { ensureSchemaCompatibility } from './db/schema';
 import * as db from './db/conversations';
 import * as messageDb from './db/messages';
 
@@ -47,9 +48,16 @@ class MCPAdapter implements IPlatformAdapter {
 }
 
 /**
- * Start the MCP server on stdio
+ * Initialize and run the MCP server connected to the process standard I/O.
+ *
+ * Verifies database connectivity and schema compatibility, registers tool and resource handlers
+ * (including `send_query` and `list_codebases` tools and conversation resource readers), and
+ * starts the server transport bound to stdio.
  */
 export async function startMcpServer(): Promise<void> {
+  await pool.query('SELECT 1');
+  await ensureSchemaCompatibility();
+
   // eslint-disable-next-line @typescript-eslint/no-deprecated
   const server = new Server(
     {

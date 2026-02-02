@@ -21,6 +21,7 @@ import * as messageDb from './db/messages';
 import * as codebaseDb from './db/codebases';
 import { handleMessage } from './orchestrator/orchestrator';
 import { pool } from './db/connection';
+import { ensureSchemaCompatibility } from './db/schema';
 import { ConversationLockManager } from './utils/conversation-lock';
 import { resolveWorkspacePath } from './utils/paths';
 import { startMcpServer } from './mcp-server';
@@ -33,6 +34,13 @@ interface ExtWebSocket extends WebSocket {
   isAlive: boolean;
 }
 
+/**
+ * Starts and runs the Remote Coding Agent application, initializing adapters, servers, routes, and shutdown handlers.
+ *
+ * Performs startup tasks including MCP-mode handling, environment validation, database connection and schema compatibility check, conversation lock manager initialization, adapter startup (Test, GitHub, WebUI, Telegram), Express HTTP routes (health, test, WebUI API, file endpoints, GitHub webhook), WebSocket server with authentication and heartbeat, and graceful shutdown registration.
+ *
+ * @returns Nothing.
+ */
 async function main(): Promise<void> {
   const isMcpMode = process.argv.includes('--mcp');
   
@@ -74,6 +82,7 @@ async function main(): Promise<void> {
   // Test database connection
   try {
     await pool.query('SELECT 1');
+    await ensureSchemaCompatibility();
     console.log('[Database] Connected successfully');
   } catch (error) {
     console.error('[Database] Connection failed:', error);
