@@ -1,8 +1,14 @@
 import { pool } from './connection';
 
 /**
- * Ensures additive columns introduced by later migrations exist.
- * This protects runtime paths when older databases missed a migration.
+ * Ensure runtime compatibility by adding additive columns introduced by later migrations.
+ *
+ * Adds (if absent):
+ * - remote_agent_codebases.sandbox_mode VARCHAR(50) DEFAULT 'workspace-write'
+ * - remote_agent_conversations.model_id VARCHAR(50)
+ * - remote_agent_conversations.additional_dirs TEXT[]
+ * - remote_agent_conversations.last_bootstrap_at TIMESTAMP WITH TIME ZONE
+ * - remote_agent_conversations.bootstrap_status VARCHAR(20) DEFAULT 'pending'
  */
 export async function ensureSchemaCompatibility(): Promise<void> {
   await pool.query(`

@@ -12,6 +12,12 @@ export interface ProjectRecipe {
 
 const BOOTSTRAP_RESULT_REGEX = /BOOTSTRAP_RESULT\s*:\s*(success|failed)/i;
 
+/**
+ * Extracts an explicit bootstrap result marker from assistant output.
+ *
+ * @param text - Assistant output to search for a `BOOTSTRAP_RESULT: <value>` marker
+ * @returns `success` if the marker indicates success, `failed` if it indicates failure, `null` if no marker is found
+ */
 function parseBootstrapResult(text: string): 'success' | 'failed' | null {
   const match = BOOTSTRAP_RESULT_REGEX.exec(text);
   if (!match?.[1]) return null;
@@ -74,7 +80,15 @@ export async function detectSetup(cwd: string): Promise<string[]> {
 }
 
 /**
- * Executes the bootstrap process for a conversation
+ * Provision the conversation's working directory by detecting and running required setup commands, updating the conversation's bootstrap status.
+ *
+ * Detects necessary setup commands in the conversation's working directory, requests the assistant client to execute them inside the codebase sandbox (the assistant must emit an explicit `BOOTSTRAP_RESULT: success` or `BOOTSTRAP_RESULT: failed` marker), and persists bootstrap status and timestamp to the conversation record.
+ *
+ * @param conversation - Conversation record containing id, cwd, and current bootstrap_status
+ * @param codebase - Codebase configuration used to determine sandbox mode and default working directory
+ * @param aiClient - Assistant client used to execute setup commands in the codebase sandbox
+ * @param force - When true, bypasses early skips and danger-mode approval checks
+ * @returns An object with `status` set to one of `success`, `failed`, `skipped`, or `needs-approval`, and a human-readable `message` describing the outcome
  */
 export async function runBootstrap(
   conversation: Conversation,
