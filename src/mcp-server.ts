@@ -48,7 +48,11 @@ class MCPAdapter implements IPlatformAdapter {
 }
 
 /**
- * Start the MCP server on stdio
+ * Initialize and run the MCP server connected to the process standard I/O.
+ *
+ * Verifies database connectivity and schema compatibility, registers tool and resource handlers
+ * (including `send_query` and `list_codebases` tools and conversation resource readers), and
+ * starts the server transport bound to stdio.
  */
 export async function startMcpServer(): Promise<void> {
   await pool.query('SELECT 1');
