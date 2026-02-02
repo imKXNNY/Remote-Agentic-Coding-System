@@ -1,5 +1,6 @@
 import { stat } from 'fs/promises';
 import { join } from 'path';
+import { createHash } from 'crypto';
 import { Conversation, Codebase, IAssistantClient } from '../types';
 import * as db from '../db/conversations';
 
@@ -16,6 +17,30 @@ function parseBootstrapResult(text: string): 'success' | 'failed' | null {
   const match = BOOTSTRAP_RESULT_REGEX.exec(text);
   if (!match?.[1]) return null;
   return match[1].toLowerCase() === 'success' ? 'success' : 'failed';
+}
+
+function logBootstrapOutputDiagnostics(
+  explicitResult: 'success' | 'failed' | null,
+  lastAssistantChunk: string
+): void {
+  const trimmed = lastAssistantChunk.trim();
+  const length = trimmed.length;
+  const hashPrefix = createHash('sha256').update(trimmed).digest('hex').slice(0, 12);
+  const debugEnabled = process.env.DEBUG_BOOTSTRAP_OUTPUT === 'true';
+
+  if (explicitResult === 'failed') {
+    console.warn(
+      `[Bootstrap] Setup reported explicit failure marker. output_length=${String(length)} output_sha256_prefix=${hashPrefix}`
+    );
+  } else {
+    console.warn(
+      `[Bootstrap] Setup finished without BOOTSTRAP_RESULT marker. output_length=${String(length)} output_sha256_prefix=${hashPrefix}`
+    );
+  }
+
+  if (debugEnabled && length > 0) {
+    console.warn(`[Bootstrap] DEBUG_BOOTSTRAP_OUTPUT=true last assistant chunk: ${trimmed.slice(0, 2000)}`);
+  }
 }
 
 /**
@@ -139,12 +164,7 @@ export async function runBootstrap(
     }
 
     if (explicitResult !== 'success') {
-      if (explicitResult === 'failed') {
-        console.warn('[Bootstrap] Setup reported explicit failure marker.');
-      } else {
-        const preview = lastAssistantChunk.trim().slice(0, 500) || '(no assistant output)';
-        console.warn(`[Bootstrap] Setup finished without BOOTSTRAP_RESULT marker. Last assistant chunk: ${preview}`);
-      }
+      logBootstrapOutputDiagnostics(explicitResult, lastAssistantChunk);
       await db.updateConversation(conversation.id, { bootstrap_status: 'failed' });
       return {
         status: 'failed',

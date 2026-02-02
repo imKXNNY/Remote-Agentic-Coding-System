@@ -100,6 +100,7 @@ describe('runBootstrap marker parsing', () => {
     expect(result.message).toContain('BOOTSTRAP_RESULT: success');
     expect(db.updateConversation).toHaveBeenCalledWith('conv-1', { bootstrap_status: 'failed' });
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('without BOOTSTRAP_RESULT marker'));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('output_sha256_prefix='));
   });
 
   it('marks bootstrap failed when explicit failed marker is present', async () => {
@@ -114,6 +115,7 @@ describe('runBootstrap marker parsing', () => {
 
     expect(result.status).toBe('failed');
     expect(db.updateConversation).toHaveBeenCalledWith('conv-1', { bootstrap_status: 'failed' });
-    expect(warnSpy).toHaveBeenCalledWith('[Bootstrap] Setup reported explicit failure marker.');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Setup reported explicit failure marker'));
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('output_sha256_prefix='));
   });
 });
