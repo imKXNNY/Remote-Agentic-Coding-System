@@ -21,6 +21,7 @@ import * as messageDb from './db/messages';
 import * as codebaseDb from './db/codebases';
 import { handleMessage } from './orchestrator/orchestrator';
 import { pool } from './db/connection';
+import { ensureSchemaCompatibility } from './db/schema';
 import { ConversationLockManager } from './utils/conversation-lock';
 import { resolveWorkspacePath } from './utils/paths';
 import { startMcpServer } from './mcp-server';
@@ -74,6 +75,7 @@ async function main(): Promise<void> {
   // Test database connection
   try {
     await pool.query('SELECT 1');
+    await ensureSchemaCompatibility();
     console.log('[Database] Connected successfully');
   } catch (error) {
     console.error('[Database] Connection failed:', error);
