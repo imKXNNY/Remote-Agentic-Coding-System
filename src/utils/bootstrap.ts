@@ -20,9 +20,10 @@ const BOOTSTRAP_RESULT_REGEX = /BOOTSTRAP_RESULT\s*:\s*(success|failed)/i;
  * @returns `success` if the marker indicates success, `failed` if it indicates failure, `null` if no marker is found
  */
 function parseBootstrapResult(text: string): 'success' | 'failed' | null {
-  const match = BOOTSTRAP_RESULT_REGEX.exec(text);
-  if (!match?.[1]) return null;
-  return match[1].toLowerCase() === 'success' ? 'success' : 'failed';
+  const matches = [...text.matchAll(new RegExp(BOOTSTRAP_RESULT_REGEX.source, 'gi'))];
+  const last = matches[matches.length - 1];
+  if (!last?.[1]) return null;
+  return last[1].toLowerCase() === 'success' ? 'success' : 'failed';
 }
 
 function logBootstrapOutputDiagnostics(

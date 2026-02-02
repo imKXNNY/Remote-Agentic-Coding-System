@@ -118,4 +118,21 @@ describe('runBootstrap marker parsing', () => {
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Setup reported explicit failure marker'));
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('output_sha256_prefix='));
   });
+
+  it('uses the last marker when multiple BOOTSTRAP_RESULT markers are present', async () => {
+    const aiClient: IAssistantClient = {
+      sendQuery: jest.fn(() =>
+        asStream([
+          { type: 'assistant', content: 'BOOTSTRAP_RESULT: success' },
+          { type: 'assistant', content: '... continuing checks ... BOOTSTRAP_RESULT: failed' },
+        ])
+      ),
+      getType: () => 'codex',
+    };
+
+    const result = await runBootstrap(createConversation(tempDir), createCodebase(tempDir), aiClient, true);
+
+    expect(result.status).toBe('failed');
+    expect(db.updateConversation).toHaveBeenCalledWith('conv-1', { bootstrap_status: 'failed' });
+  });
 });
