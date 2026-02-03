@@ -21,7 +21,7 @@ This design layers policy and control-plane behavior on top of existing message 
 | `issue_comment.created` | contains `@remote-agent`; actor not in bot denylist | Execute requested workflow for issue context | Primary trigger for explicit user intent |
 | `pull_request.opened` | PR author not bot account; repo policy allows | Read-only review summary + checklist | No auto-push by default |
 | `pull_request_review_comment.created` | contains `@remote-agent`; PR not locked | Targeted fix proposal or patch branch update | High-risk paths require approval gate |
-| `check_run.completed` / `check_suite.completed` | failed checks + policy allowlist | Produce failure RCA + suggested fix plan | Optional auto-fix only for low-risk categories |
+| `check_run.completed` / `check_suite.completed` | failed checks + policy allowlist | Produce failure RCA + suggested fix plan | Auto-fix is limited to low-risk failure classes (docs/report/test-only and formatting/lint/type-fixable cases); unit/integration/security failures require approval |
 
 Excluded by default:
 - Force-push events, branch deletion events, release/tag events, and cross-repo events.
@@ -50,6 +50,19 @@ After each mutating run (commit/push/PR update), enforce cooldown:
 - No green-check progress after `N` attempts.
 - Policy violation detected (protected path, branch mismatch, disallowed command).
 
+Failure signature definition:
+- `failure_signature = hash(error_message + ":" + exit_code + ":" + sorted_failing_tests)`
+- A repeated signature means this value is identical across consecutive attempts.
+
+Net diff definition:
+- A net diff exists when there is any meaningful change between attempts: commit SHA changes, file diffs, or test outcome differences.
+- "Without net diff" means no commit/file changes and identical failing test set/outcome.
+
+Example:
+- Attempt 1 and Attempt 2 both produce `hash("pytest failed:42:test_a,test_b")`.
+- No new commit and identical failing tests (`test_a`, `test_b`) in both attempts.
+- Condition is met -> pause chain and require human intervention.
+
 ## Safety Gates
 
 ### Policy inputs
@@ -68,6 +81,13 @@ Default autonomy:
 - Low risk: fully autonomous allowed when policy gates pass.
 - Medium risk: autonomous allowed only with explicit issue/PR mention trigger and green preflight.
 - High risk: requires human approval before mutation.
+
+Green preflight definition (for medium-risk autonomy):
+- Explicit issue/PR mention trigger is present (for example `@remote-agent`).
+- All mandatory policy gates pass (repo/branch/command/path/risk checks).
+- Pre-mutation validation passes for required checks (at minimum lint + type-check + targeted tests).
+- Required CI/security checks are green per policy profile.
+- Policy may require all checks or a configured subset; the active policy profile must declare this explicitly.
 
 ## Human Override and Escalation
 
@@ -108,7 +128,7 @@ Audit log requirements:
 ### Fully autonomous allowed
 - Read-only analysis/commenting workflows.
 - Low-risk mutation workflows under allowlist + policy pass.
-- Medium-risk mutation only when explicitly invoked via `@remote-agent` by authorized actor.
+- Medium-risk mutation only when explicitly invoked via `@remote-agent` by an authorized maintainer.
 
 ### Human approval required
 - High-risk mutation workflows.
