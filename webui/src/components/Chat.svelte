@@ -11,6 +11,7 @@
   import CommandPalette from './CommandPalette.svelte';
   import ContextSelector from './ContextSelector.svelte';
   import StatsPanel from './StatsPanel.svelte';
+  import { renderAssistantMarkdown } from '../lib/markdown';
 
   interface Conversation {
     id: string;
@@ -36,6 +37,7 @@
   let joined = false;
   let showControls = false;
   const METADATA_SYNC_DELAY_MS = 1000;
+  const markdownCache = new Map<string, string>();
 
   async function refreshConversations(preferredId?: string) {
     try {
@@ -211,6 +213,16 @@
     }, METADATA_SYNC_DELAY_MS);
   }
 
+  function renderAssistantContent(content: string): string {
+    const cached = markdownCache.get(content);
+    if (cached) {
+      return cached;
+    }
+    const rendered = renderAssistantMarkdown(content);
+    markdownCache.set(content, rendered);
+    return rendered;
+  }
+
   afterUpdate(() => {
     if (messagesDiv) messagesDiv.scrollTop = messagesDiv.scrollHeight;
   });
@@ -307,7 +319,11 @@
         {#each currentMessages as msg}
           <div class="message-wrapper {msg.payload.role}">
             <div class="message-bubble shadow">
-              <div class="content">{msg.payload.content}</div>
+              {#if msg.payload.role === 'assistant'}
+                <div class="content markdown">{@html renderAssistantContent(String(msg.payload.content ?? ''))}</div>
+              {:else}
+                <div class="content">{msg.payload.content}</div>
+              {/if}
               <div class="meta">
                 {new Date(msg.payload.timestamp).toLocaleTimeString([], {
                   hour: '2-digit',
@@ -673,6 +689,86 @@
   .content {
     white-space: pre-wrap;
     word-break: break-word;
+  }
+
+  .content.markdown {
+    white-space: normal;
+  }
+
+  .content.markdown :global(p) {
+    margin: 0.5rem 0;
+    line-height: 1.6;
+  }
+
+  .content.markdown :global(ul),
+  .content.markdown :global(ol) {
+    margin: 0.4rem 0 0.4rem 1.2rem;
+    padding: 0;
+  }
+
+  .content.markdown :global(li) {
+    margin: 0.2rem 0;
+  }
+
+  .content.markdown :global(h1),
+  .content.markdown :global(h2),
+  .content.markdown :global(h3),
+  .content.markdown :global(h4) {
+    margin: 0.75rem 0 0.4rem;
+    line-height: 1.3;
+  }
+
+  .content.markdown :global(pre) {
+    margin: 0.6rem 0;
+    padding: 0.7rem 0.8rem;
+    border-radius: 8px;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid var(--border-subtle);
+    overflow-x: auto;
+  }
+
+  .content.markdown :global(code) {
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+  }
+
+  .content.markdown :global(:not(pre) > code) {
+    padding: 0.1rem 0.35rem;
+    border-radius: 4px;
+    background: rgba(0, 0, 0, 0.25);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .content.markdown :global(blockquote) {
+    margin: 0.6rem 0;
+    padding: 0.35rem 0.7rem;
+    border-left: 3px solid var(--accent-blue);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-secondary);
+  }
+
+  .content.markdown :global(a) {
+    color: var(--accent-blue);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
+  .content.markdown :global(a:hover) {
+    color: var(--accent-blue-hover);
+  }
+
+  .content.markdown :global(table) {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 0.7rem 0;
+    font-size: 0.9em;
+  }
+
+  .content.markdown :global(th),
+  .content.markdown :global(td) {
+    border: 1px solid var(--border-subtle);
+    padding: 0.35rem 0.5rem;
+    text-align: left;
   }
 
   .meta {
