@@ -712,6 +712,10 @@ Commands are version-controlled with your codebase, not stored in the database.
 
 ## Architecture
 
+Further reading:
+- Core architecture guide: `docs/architecture.md`
+- OpenClaw research and integration decision: `docs/OpenClaw/README.md`
+
 ### System Overview
 
 ```
