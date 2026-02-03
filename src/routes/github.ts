@@ -1,27 +1,45 @@
 import { Router } from 'express';
 import { Octokit } from '@octokit/rest';
+import type { Request, Response } from 'express';
 import { asyncHandler } from '../utils/async-handler';
+import {
+  createAuthFailedPayload,
+  createAuthUnavailablePayload,
+  getGitHubApiErrorStatus,
+  getGitHubAuthPreflight,
+} from '../utils/github-auth';
 
 const router = Router();
-
-// Initialize Octokit with the server's token
-// This allows the WebUI to browse issues without forcing every user to provide a token
-const octokit = new Octokit({ 
-  auth: process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN 
-});
 
 /**
  * GET /api/github/issues
  * Fetch open issues for a repository
  * Query params: owner, repo
  */
-router.get('/github/issues', asyncHandler(async (req, res) => {
-  const owner = req.query.owner as string;
-  const repo = req.query.repo as string;
+export async function getGithubIssuesHandler(req: Request, res: Response): Promise<void> {
+  const owner = typeof req.query.owner === 'string' ? req.query.owner : undefined;
+  const repo = typeof req.query.repo === 'string' ? req.query.repo : undefined;
 
   if (!owner || !repo) {
-    return res.status(400).json({ error: 'Missing owner or repo query parameters' });
+    res.status(400).json({ error: 'Missing owner or repo query parameters' });
+    return;
   }
+
+  const preflight = getGitHubAuthPreflight();
+  if (!preflight.ready || !preflight.token) {
+    console.warn('[API] GitHub auth unavailable for /api/github/issues', {
+      reason: preflight.reason,
+      source: preflight.source,
+      hasGITHUB_TOKEN: preflight.hasGITHUB_TOKEN,
+      hasGH_TOKEN: preflight.hasGH_TOKEN,
+    });
+    res.status(503).json(createAuthUnavailablePayload(preflight));
+    return;
+  }
+
+  const octokit = new Octokit({
+    auth: preflight.token,
+  });
 
   try {
     const { data } = await octokit.rest.issues.listForRepo({
@@ -51,12 +69,26 @@ router.get('/github/issues', asyncHandler(async (req, res) => {
     // For "Connect to Issue" context, standard issues are usually what we want (triage etc).
     const onlyIssues = issues.filter(i => !i.is_pull_request);
 
-    return res.json(onlyIssues);
+    res.json(onlyIssues);
+    return;
   } catch (error) {
+    const status = getGitHubApiErrorStatus(error);
+    if (status === 401 || status === 403) {
+      console.warn('[API] GitHub auth failed for /api/github/issues', {
+        status,
+        source: preflight.source,
+      });
+      res.status(502).json(createAuthFailedPayload(preflight));
+      return;
+    }
+
     const message = error instanceof Error ? error.message : String(error);
     console.error('[API] Failed to fetch GitHub issues:', message);
-    return res.status(500).json({ error: 'Failed to fetch issues from GitHub' });
+    res.status(500).json({ error: 'Failed to fetch issues from GitHub', code: 'GITHUB_API_ERROR' });
+    return;
   }
-}));
+}
+
+router.get('/github/issues', asyncHandler(getGithubIssuesHandler));
 
 export default router;

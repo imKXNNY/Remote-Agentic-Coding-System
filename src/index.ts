@@ -28,6 +28,7 @@ import { startMcpServer } from './mcp-server';
 import uploadRouter from './routes/upload';
 import githubRouter from './routes/github';
 import { asyncHandler } from './utils/async-handler';
+import { getGitHubAuthPreflight } from './utils/github-auth';
 
 // Extended WebSocket for heartbeat
 interface ExtWebSocket extends WebSocket {
@@ -77,6 +78,17 @@ async function main(): Promise<void> {
   }
   if (!hasCodexCredentials) {
     console.warn('[App] Codex credentials not found. Codex assistant will be unavailable.');
+  }
+
+  const githubAuthPreflight = getGitHubAuthPreflight();
+  if (githubAuthPreflight.ready) {
+    console.log(
+      `[GitHub] Auth preflight OK (${githubAuthPreflight.source}, length: ${String(githubAuthPreflight.tokenLength)})`
+    );
+  } else {
+    console.warn(
+      `[GitHub] Auth preflight not ready: ${githubAuthPreflight.reason ?? 'missing token'} (set GH_TOKEN or GITHUB_TOKEN)`
+    );
   }
 
   // Test database connection

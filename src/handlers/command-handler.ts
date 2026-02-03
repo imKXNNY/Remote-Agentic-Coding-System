@@ -413,7 +413,7 @@ Session:
 
         // Build clone command with authentication if GitHub token is available
         let cloneCommand = `git clone ${repoUrl} ${targetPath}`;
-        const ghToken = process.env.GH_TOKEN;
+        const ghToken = process.env.GITHUB_TOKEN ?? process.env.GH_TOKEN;
 
         if (ghToken && repoUrl.includes('github.com')) {
           // Inject token into GitHub URL for private repo access
