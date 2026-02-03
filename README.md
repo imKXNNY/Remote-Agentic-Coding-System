@@ -223,6 +223,7 @@ You must configure **at least one** platform to interact with your AI assistant.
 - Workflow palette with grouped commands, filtering, and optional arguments
 - GitHub issue linking (`/context link-issue`) with persistent conversation context
 - Telemetry panel with per-assistant request/latency/success metrics
+- Assistant message markdown rendering with styled code blocks and safe external links
 
 **Configuration:**
 
