@@ -17,7 +17,7 @@ This design layers policy and control-plane behavior on top of existing message 
 
 | Event | Conditions | Autonomous Action | Notes |
 |---|---|---|---|
-| `issues.opened` | repository + branch policy allowed; issue not labeled `no-auto` | Triage + optional draft plan comment | Default read-only unless issue label enables write mode |
+| `issues.opened` | repository + branch policy allowed; issue not labeled `no-auto` | Triage + optional draft plan comment | Default read-only; write mode only when issue is labeled `auto` (and not `no-auto`) |
 | `issue_comment.created` | contains `@remote-agent`; actor not in bot denylist | Execute requested workflow for issue context | Primary trigger for explicit user intent |
 | `pull_request.opened` | PR author not bot account; repo policy allows | Read-only review summary + checklist | No auto-push by default |
 | `pull_request_review_comment.created` | contains `@remote-agent`; PR not locked | Targeted fix proposal or patch branch update | High-risk paths require approval gate |
@@ -30,6 +30,7 @@ Excluded by default:
 
 ### 1) Dedupe + idempotency key
 Use key: `<delivery_id>:<repo>:<object_type>:<object_number>:<action>:<head_sha?>`.
+- Optional field: `head_sha` (include only for PR/push/check events where a head SHA exists).
 - Store processed keys with TTL (24h default).
 - Reject duplicates early with `status=deduped`.
 
@@ -70,10 +71,10 @@ Default autonomy:
 ## Human Override and Escalation
 
 ### Required human approval
-- Any high-risk mutation.
-- Any run exceeding iteration budget.
-- Any run touching protected paths.
-- Any non-fast-forward push or rebase requirement.
+- High-risk mutations.
+- Runs exceeding iteration budget.
+- Operations touching protected paths.
+- Non-fast-forward pushes or rebase requirements.
 
 ### Control commands (issue/PR comments by maintainers)
 - `@remote-agent approve-run <run-id>`
@@ -143,4 +144,3 @@ Success SLO candidates:
 - #30 - Implement webhook control-plane primitives (idempotency, chain state, iteration/cooldown guardrails).
 - #31 - Implement policy engine + approval gates (repo/branch allowlist, command/path restrictions, risk tiers).
 - #32 - Implement automation observability and audit trail (run ledger, metrics, replay-safe statuses, dashboards).
-
