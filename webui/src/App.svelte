@@ -21,6 +21,10 @@
   const LAYOUT_STORAGE_KEY = 'webui.layout.v1';
   const NARROW_LAYOUT_QUERY = '(max-width: 1100px)';
 
+  function logLayoutStorageError(context: string, error: unknown): void {
+    console.warn(`[WebUI] ${context}`, error);
+  }
+
   function loadLayoutState(): void {
     try {
       const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
@@ -39,21 +43,25 @@
       if (parsed.mobilePanel === 'chat' || parsed.mobilePanel === 'explorer' || parsed.mobilePanel === 'preview') {
         mobilePanel = parsed.mobilePanel;
       }
-    } catch {
-      // Ignore malformed state.
+    } catch (error) {
+      logLayoutStorageError('Failed to restore layout state', error);
     }
   }
 
   function saveLayoutState(): void {
     if (!layoutInitialized) return;
-    localStorage.setItem(
-      LAYOUT_STORAGE_KEY,
-      JSON.stringify({
-        showExplorer,
-        showPreview,
-        mobilePanel,
-      })
-    );
+    try {
+      localStorage.setItem(
+        LAYOUT_STORAGE_KEY,
+        JSON.stringify({
+          showExplorer,
+          showPreview,
+          mobilePanel,
+        })
+      );
+    } catch (error) {
+      logLayoutStorageError('Failed to persist layout state', error);
+    }
   }
 
   function syncViewport(mql: MediaQueryList | MediaQueryListEvent): void {
@@ -157,13 +165,13 @@
         </div>
 
         {#if isNarrowScreen}
-          <div class="toolbar-group mobile-tabs" role="tablist" aria-label="Active panel">
+          <div class="toolbar-group mobile-tabs" role="group" aria-label="Active panel">
             {#if showExplorer}
               <button
                 class="tab-btn"
                 class:active={mobilePanel === 'explorer'}
-                role="tab"
-                aria-selected={mobilePanel === 'explorer'}
+                aria-pressed={mobilePanel === 'explorer'}
+                aria-label="Show files panel"
                 on:click={() => (mobilePanel = 'explorer')}
               >
                 Files
@@ -172,8 +180,8 @@
             <button
               class="tab-btn"
               class:active={mobilePanel === 'chat'}
-              role="tab"
-              aria-selected={mobilePanel === 'chat'}
+              aria-pressed={mobilePanel === 'chat'}
+              aria-label="Show chat panel"
               on:click={() => (mobilePanel = 'chat')}
             >
               Chat
@@ -182,8 +190,8 @@
               <button
                 class="tab-btn"
                 class:active={mobilePanel === 'preview'}
-                role="tab"
-                aria-selected={mobilePanel === 'preview'}
+                aria-pressed={mobilePanel === 'preview'}
+                aria-label="Show preview panel"
                 on:click={() => (mobilePanel = 'preview')}
               >
                 Preview
