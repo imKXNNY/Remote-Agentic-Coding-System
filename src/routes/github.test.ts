@@ -62,6 +62,19 @@ describe('github route auth diagnostics', () => {
     expect(Octokit).not.toHaveBeenCalled();
   });
 
+  test('returns 400 when owner/repo query params are not strings', async () => {
+    process.env.GH_TOKEN = 'ghp_abcdefghijklmnopqrstuvwxyz1234567890';
+    const req = {
+      query: { owner: ['imKXNNY'], repo: 'Remote-Agentic-Coding-System' },
+    } as unknown as Request;
+    const res = createResponse();
+
+    await getGithubIssuesHandler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(Octokit).not.toHaveBeenCalled();
+  });
+
   test('returns issues on happy path and filters pull requests', async () => {
     process.env.GH_TOKEN = 'ghp_abcdefghijklmnopqrstuvwxyz1234567890';
     listForRepo.mockResolvedValue({

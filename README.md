@@ -854,9 +854,9 @@ docker compose logs app | grep "GitHub] Auth preflight"          # --profile ext
 docker compose logs app-with-db | grep "GitHub] Auth preflight"  # --profile with-db
 ```
 
-If auth is unavailable, `GET /api/github/issues` now returns a deterministic `503` payload with code:
-- `GITHUB_AUTH_UNAVAILABLE` (missing/malformed token)
-- `GITHUB_AUTH_FAILED` (upstream GitHub rejected token/scopes)
+`GET /api/github/issues` error codes:
+- `503` + `GITHUB_AUTH_UNAVAILABLE` (missing/malformed token)
+- `502` + `GITHUB_AUTH_FAILED` (GitHub rejected credentials/scopes)
 
 **Test token validity:**
 ```bash

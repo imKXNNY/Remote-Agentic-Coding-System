@@ -35,8 +35,18 @@ describe('github-auth utility', () => {
     expect(preflight.tokenState).toBe('malformed');
   });
 
+  test('accepts token at minimum length boundary', () => {
+    const preflight = getGitHubAuthPreflight({
+      GH_TOKEN: 'ghp_1234567890123456',
+    });
+
+    expect(preflight.ready).toBe(true);
+    expect(preflight.tokenState).toBe('present');
+  });
+
   test('masks token values', () => {
     expect(maskToken(null)).toBe('<missing>');
+    expect(maskToken('ghp_1234')).toBe('********');
     expect(maskToken('ghp_abcdefghijklmnopqrstuvwxyz')).toBe('ghp_...wxyz');
   });
 

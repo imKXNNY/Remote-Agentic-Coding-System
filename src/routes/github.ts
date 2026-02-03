@@ -17,8 +17,8 @@ const router = Router();
  * Query params: owner, repo
  */
 export async function getGithubIssuesHandler(req: Request, res: Response): Promise<void> {
-  const owner = req.query.owner as string;
-  const repo = req.query.repo as string;
+  const owner = typeof req.query.owner === 'string' ? req.query.owner : undefined;
+  const repo = typeof req.query.repo === 'string' ? req.query.repo : undefined;
 
   if (!owner || !repo) {
     res.status(400).json({ error: 'Missing owner or repo query parameters' });
