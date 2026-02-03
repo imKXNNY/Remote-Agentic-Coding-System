@@ -715,6 +715,7 @@ Commands are version-controlled with your codebase, not stored in the database.
 Further reading:
 - Core architecture guide: `docs/architecture.md`
 - OpenClaw research and integration decision: `docs/OpenClaw/README.md`
+- Get-shit-done evaluation and adoption decision: `docs/Get-Shit-Done/README.md`
 
 ### System Overview
 
