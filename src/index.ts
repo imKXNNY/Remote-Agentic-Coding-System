@@ -335,7 +335,12 @@ async function main(): Promise<void> {
         [req.params.id]
       );
 
-      res.json({ linkedIssue: result.rows[0]?.linked_issue ?? null });
+      if (!result.rows[0]) {
+        res.status(404).json({ error: 'Conversation not found' });
+        return;
+      }
+
+      res.json({ linkedIssue: result.rows[0].linked_issue ?? null });
     } catch (error) {
       console.error('[WebUI] Failed to fetch conversation context:', error);
       res.status(500).json({ error: 'Failed to fetch conversation context' });

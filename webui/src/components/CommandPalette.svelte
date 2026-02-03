@@ -21,6 +21,10 @@
     error = '';
     try {
       commands = await API.getCommands(conversationId);
+      if (selectedCommand && !commands[selectedCommand]) {
+        selectedCommand = '';
+        argsDraft = '';
+      }
     } catch (e: any) {
       error = e.message;
     } finally {

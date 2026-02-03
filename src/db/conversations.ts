@@ -2,7 +2,41 @@
  * Database operations for conversations
  */
 import { pool } from './connection';
-import { Conversation } from '../types';
+import { Conversation, LinkedIssueRef } from '../types';
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizeLinkedIssue(linkedIssue: Conversation['linked_issue']): LinkedIssueRef | null {
+  if (linkedIssue === null) {
+    return null;
+  }
+
+  const candidate = linkedIssue as Partial<LinkedIssueRef>;
+  if (
+    !isNonEmptyString(candidate.owner) ||
+    !isNonEmptyString(candidate.repo) ||
+    typeof candidate.number !== 'number' ||
+    !Number.isInteger(candidate.number) ||
+    candidate.number <= 0
+  ) {
+    throw new Error('Invalid linked_issue payload: expected owner/repo and positive issue number');
+  }
+
+  const normalized: LinkedIssueRef = {
+    owner: candidate.owner.trim(),
+    repo: candidate.repo.trim(),
+    number: candidate.number,
+    linkedAt: isNonEmptyString(candidate.linkedAt) ? candidate.linkedAt : new Date().toISOString(),
+  };
+
+  if (isNonEmptyString(candidate.title)) {
+    normalized.title = candidate.title;
+  }
+
+  return normalized;
+}
 
 export async function getOrCreateConversation(
   platformType: string,
@@ -76,7 +110,7 @@ export async function updateConversation(
   }
   if (updates.linked_issue !== undefined) {
     fields.push(`linked_issue = $${String(i++)}`);
-    values.push((updates.linked_issue as unknown as Record<string, unknown>) ?? null);
+    values.push(normalizeLinkedIssue(updates.linked_issue) as unknown as Record<string, unknown> | null);
   }
   if (updates.additional_dirs !== undefined) {
     fields.push(`additional_dirs = $${String(i++)}`);

@@ -35,6 +35,7 @@
   let messagesDiv: HTMLDivElement;
   let joined = false;
   let showControls = false;
+  const METADATA_SYNC_DELAY_MS = 1000;
 
   async function refreshConversations(preferredId?: string) {
     try {
@@ -128,8 +129,7 @@
   onMount(async () => {
     try {
       await refreshConversations();
-      if (conversationList.length > 0) {
-        conversationId = conversationList[0].id;
+      if (conversationId) {
         await loadHistory(conversationId);
       } else {
         // Create new ID if none exist (random or timestamp)
@@ -208,7 +208,7 @@
     void refreshConversations(conversationId);
     setTimeout(() => {
       void refreshConversations(conversationId);
-    }, 1000);
+    }, METADATA_SYNC_DELAY_MS);
   }
 
   afterUpdate(() => {

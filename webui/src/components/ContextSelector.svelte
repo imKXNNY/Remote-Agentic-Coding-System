@@ -84,7 +84,8 @@
   function addDirectory(): void {
     const value = addDirDraft.trim();
     if (!value) return;
-    dispatch('select', `/codex-add-dir "${value}"`);
+    const escapedValue = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    dispatch('select', `/codex-add-dir "${escapedValue}"`);
     addDirDraft = '';
   }
 

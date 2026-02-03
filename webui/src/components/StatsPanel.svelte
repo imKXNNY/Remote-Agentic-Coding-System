@@ -15,6 +15,7 @@
   let error = '';
 
   async function loadStats(): Promise<void> {
+    if (loading) return;
     loading = true;
     error = '';
     try {
@@ -46,7 +47,7 @@
 <div class="stats-panel glass">
   <div class="stats-header">
     <h3>Telemetry</h3>
-    <button class="refresh-btn" on:click={loadStats} title="Refresh stats">
+    <button class="refresh-btn" on:click={loadStats} title="Refresh stats" disabled={loading}>
       Refresh
     </button>
   </div>
