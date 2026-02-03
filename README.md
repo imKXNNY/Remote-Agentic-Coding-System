@@ -219,6 +219,10 @@ You must configure **at least one** platform to interact with your AI assistant.
 - Real-time chat with AI
 - File tree browsing & code preview (Monaco Editor)
 - WebSocket streaming
+- Context controls for codebase/session/runtime (model, sandbox, additional dirs)
+- Workflow palette with grouped commands, filtering, and optional arguments
+- GitHub issue linking (`/context link-issue`) with persistent conversation context
+- Telemetry panel with per-assistant request/latency/success metrics
 
 **Configuration:**
 

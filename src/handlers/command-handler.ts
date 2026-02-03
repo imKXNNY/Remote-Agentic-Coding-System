@@ -98,6 +98,7 @@ Codex Integration:
 Codebase:
   /clone <repo-url> - Clone repository
   /repos - List workspace repositories
+  /set-codebase <id> - Switch active codebase context
   /getcwd - Show working directory
   /setcwd <path> - Set directory
   Note: Codebases use full paths (e.g., /workspace/repo-name)
@@ -105,6 +106,8 @@ Codebase:
 Session:
   /status - Show state
   /reset - Clear session
+  /context link-issue <owner/repo#num> ["title"] - Link issue context to this session
+  /context clear - Clear linked issue context
   /bootstrap [force] - Auto-provision project environment
   /help - Show help
   /setmodel <id> - Set assistant model (GPT-5, etc.)
@@ -147,10 +150,17 @@ Session:
       if (args.length === 0) {
         return { success: false, message: 'Usage: /codex-add-dir <path>' };
       }
-      const newDir = join('/workspace', args[0]);
+      const newDir = join('/workspace', args[0]).replace(/\\/g, '/');
       try {
         await access(newDir);
-        const currentDirs = conversation.additional_dirs ?? [];
+        const normalizedCwd = conversation.cwd?.replace(/\\/g, '/');
+        if (normalizedCwd === newDir) {
+          return {
+            success: true,
+            message: `Directory is already the main working directory: ${newDir}`,
+          };
+        }
+        const currentDirs = (conversation.additional_dirs ?? []).map(dir => dir.replace(/\\/g, '/'));
         if (currentDirs.includes(newDir)) {
            return { success: true, message: `Directory already exists in list: ${newDir}` };
         }
@@ -294,6 +304,38 @@ Session:
         success: true,
         message: `Current working directory: ${conversation.cwd ?? 'Not set'}`,
       };
+
+    case 'set-codebase': {
+      if (args.length === 0 || !args[0]) {
+        return { success: false, message: 'Usage: /set-codebase <codebase-id>' };
+      }
+
+      const codebaseId = args[0];
+      const codebase = await codebaseDb.getCodebase(codebaseId);
+      if (!codebase) {
+        return { success: false, message: `Codebase not found: ${codebaseId}` };
+      }
+
+      await db.updateConversation(conversation.id, {
+        codebase_id: codebase.id,
+        cwd: codebase.default_cwd,
+        ai_assistant_type: codebase.ai_assistant_type,
+        additional_dirs: [],
+        bootstrap_status: 'pending',
+      });
+
+      const session = await sessionDb.getActiveSession(conversation.id);
+      if (session) {
+        await sessionDb.deactivateSession(session.id);
+        console.log('[Command] Deactivated session after codebase switch');
+      }
+
+      return {
+        success: true,
+        message: `Codebase switched to: ${codebase.name}\nPath: ${codebase.default_cwd}\nAssistant: ${codebase.ai_assistant_type}\n\nSession reset - starting fresh on next message.`,
+        modified: true,
+      };
+    }
 
     case 'setcwd': {
       if (args.length === 0) {
@@ -616,6 +658,69 @@ Session:
       return {
         success: true,
         message: 'No active session to reset.',
+      };
+    }
+
+    case 'context': {
+      if (args.length === 0) {
+        return {
+          success: false,
+          message: 'Usage: /context link-issue <owner/repo#number> ["title"] | /context clear',
+        };
+      }
+
+      const action = args[0]?.toLowerCase();
+
+      if (action === 'clear') {
+        await db.updateConversation(conversation.id, { linked_issue: null });
+        const activeSession = await sessionDb.getActiveSession(conversation.id);
+        if (activeSession) {
+          await sessionDb.updateSessionMetadata(activeSession.id, { linkedIssue: null });
+        }
+        return { success: true, message: 'Linked issue context cleared for this conversation.' };
+      }
+
+      if (action !== 'link-issue') {
+        return {
+          success: false,
+          message: 'Usage: /context link-issue <owner/repo#number> ["title"] | /context clear',
+        };
+      }
+
+      const issueRefRaw = args[1];
+      if (!issueRefRaw) {
+        return {
+          success: false,
+          message: 'Usage: /context link-issue <owner/repo#number> ["title"]',
+        };
+      }
+
+      const issueRefMatch = /^([^/]+)\/([^#]+)#(\d+)$/.exec(issueRefRaw);
+      if (!issueRefMatch) {
+        return {
+          success: false,
+          message: 'Invalid issue reference. Use format: owner/repo#number',
+        };
+      }
+
+      const title = args.slice(2).join(' ').trim() || undefined;
+      const linkedIssue = {
+        owner: issueRefMatch[1],
+        repo: issueRefMatch[2],
+        number: Number.parseInt(issueRefMatch[3], 10),
+        title,
+        linkedAt: new Date().toISOString(),
+      };
+
+      await db.updateConversation(conversation.id, { linked_issue: linkedIssue });
+      const activeSession = await sessionDb.getActiveSession(conversation.id);
+      if (activeSession) {
+        await sessionDb.updateSessionMetadata(activeSession.id, { linkedIssue });
+      }
+      const displayTitle = linkedIssue.title ? ` - ${linkedIssue.title}` : '';
+      return {
+        success: true,
+        message: `Linked issue context: ${linkedIssue.owner}/${linkedIssue.repo}#${String(linkedIssue.number)}${displayTitle}`,
       };
     }
 

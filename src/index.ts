@@ -284,11 +284,15 @@ async function main(): Promise<void> {
         SELECT 
           c.id, 
           c.platform_type as platform, 
+          c.codebase_id,
+          c.ai_assistant_type,
+          c.model_id,
           c.created_at, 
           c.updated_at, 
           c.cwd,
           c.additional_dirs,
-          b.name as project_name
+          b.name as project_name,
+          b.sandbox_mode
         FROM remote_agent_conversations c
         LEFT JOIN remote_agent_codebases b ON c.codebase_id = b.id
         ORDER BY b.name NULLS LAST, c.updated_at DESC 
@@ -318,6 +322,23 @@ async function main(): Promise<void> {
     } catch (error) {
       console.error('[WebUI] Failed to fetch messages:', error);
       res.status(500).json({ error: 'Failed to fetch messages' });
+    }
+  }));
+
+  app.get('/api/conversations/:id/context', authMiddleware, asyncHandler(async (req, res) => {
+    try {
+      const result = await pool.query<{ linked_issue: unknown }>(
+        `SELECT linked_issue
+         FROM remote_agent_conversations
+         WHERE id = $1
+         LIMIT 1`,
+        [req.params.id]
+      );
+
+      res.json({ linkedIssue: result.rows[0]?.linked_issue ?? null });
+    } catch (error) {
+      console.error('[WebUI] Failed to fetch conversation context:', error);
+      res.status(500).json({ error: 'Failed to fetch conversation context' });
     }
   }));
 

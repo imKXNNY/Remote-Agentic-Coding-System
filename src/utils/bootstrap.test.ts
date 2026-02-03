@@ -20,6 +20,7 @@ function createConversation(cwd: string): Conversation {
     ai_assistant_type: 'codex',
     model_id: null,
     additional_dirs: null,
+    linked_issue: null,
     last_bootstrap_at: null,
     bootstrap_status: 'pending',
     created_at: now,
