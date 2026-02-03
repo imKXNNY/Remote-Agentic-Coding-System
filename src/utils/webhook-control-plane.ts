@@ -82,6 +82,7 @@ export function evaluateWebhookGuardrails(input: GuardrailEvaluationInput): Guar
 }
 
 export function buildFailureSignature(errorMessage: string, exitCode: number, failingTests: string[]): string {
-  const payload = `${errorMessage}:${String(exitCode)}:${failingTests.sort().join(',')}`;
+  const sortedTests = [...failingTests].sort();
+  const payload = `${errorMessage}:${String(exitCode)}:${sortedTests.join(',')}`;
   return createHash('sha256').update(payload).digest('hex');
 }

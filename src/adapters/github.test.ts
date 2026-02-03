@@ -46,6 +46,11 @@ jest.mock('../orchestrator/orchestrator', () => ({
 
 describe('GitHubAdapter', () => {
   let adapter: GitHubAdapter;
+  const webhookDb = jest.requireMock('../db/webhook-control-plane') as {
+    intakeWebhookRun: jest.Mock;
+    finalizeWebhookRun: jest.Mock;
+    registerWebhookFailure: jest.Mock;
+  };
 
   beforeEach(() => {
     jest.clearAllMocks();
@@ -100,11 +105,41 @@ describe('GitHubAdapter', () => {
     });
   });
 
-  describe('ingestWebhook', () => {
-    const webhookDb = jest.requireMock('../db/webhook-control-plane') as {
-      intakeWebhookRun: jest.Mock;
-    };
+  describe('processWebhook', () => {
+    test('records and finalizes failure when preprocessing throws', async () => {
+      webhookDb.registerWebhookFailure.mockResolvedValueOnce({
+        shouldPause: false,
+        failureSignature: 'sig-1',
+      });
+      jest.spyOn(adapter as any, 'getOrCreateCodebaseForRepo').mockRejectedValueOnce(new Error('setup failed'));
+      jest.spyOn(adapter as any, 'sendMessage').mockResolvedValueOnce(undefined);
 
+      await adapter.processWebhook({
+        runId: 'run-1',
+        chainId: 'chain-1',
+        event: {} as any,
+        parsed: {
+          owner: 'imKXNNY',
+          repo: 'Remote-Agentic-Coding-System',
+          number: 30,
+          comment: '@remote-agent /status',
+          eventType: 'issue_comment',
+          issue: undefined,
+          pullRequest: undefined,
+        },
+      });
+
+      expect(webhookDb.registerWebhookFailure).toHaveBeenCalledWith('chain-1', 'run-1', 'setup failed');
+      expect(webhookDb.finalizeWebhookRun).toHaveBeenCalledWith(
+        'run-1',
+        'blocked_policy',
+        'processing_error'
+      );
+      expect((adapter as any).sendMessage).toHaveBeenCalled();
+    });
+  });
+
+  describe('ingestWebhook', () => {
     test('returns deduped intake result for duplicate delivery', async () => {
       webhookDb.intakeWebhookRun.mockResolvedValueOnce({
         decision: 'deduped',

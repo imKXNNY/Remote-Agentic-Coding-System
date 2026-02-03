@@ -57,7 +57,7 @@ Implement durable webhook control-plane primitives that make autonomous loops sa
 
 ## Data/API Notes
 - Prefer minimal API changes in this issue; internal primitives first.
-- If a read endpoint is needed for debugability, keep it scoped and authenticated.
+- If a read endpoint is needed for debuggability, keep it scoped and authenticated.
 
 ## Edge Cases
 - Missing delivery IDs (fallback key strategy)

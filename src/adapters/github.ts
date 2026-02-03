@@ -597,85 +597,85 @@ ${triage.technical_summary}
   async processWebhook(context: WebhookProcessContext): Promise<void> {
     const { runId, chainId, parsed } = context;
     const { owner, repo, number, comment, eventType, issue, pullRequest } = parsed;
-
-    console.log(`[GitHub] Processing ${eventType}: ${owner}/${repo}#${String(number)}`);
-
     const conversationId = this.buildConversationId(owner, repo, number);
-    const existingConv = await db.getOrCreateConversation('github', conversationId);
-    const isNewConversation = !existingConv.codebase_id;
-
-    const { codebase, repoPath, isNew: isNewCodebase } = await this.getOrCreateCodebaseForRepo(
-      owner,
-      repo
-    );
-
-    const { data: repoData } = await this.octokit.rest.repos.get({ owner, repo });
-    const defaultBranch = repoData.default_branch;
-    await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewConversation);
-
-    if (isNewCodebase) {
-      await this.autoDetectAndLoadCommands(repoPath, codebase.id);
-    }
-
-    if (isNewConversation) {
-      await db.updateConversation(existingConv.id, {
-        codebase_id: codebase.id,
-        cwd: repoPath,
-      });
-    }
-
-    const strippedComment = this.stripMention(comment);
-    let finalMessage = strippedComment;
-    let contextToAppend: string | undefined;
-
-    const isSlashCommand = strippedComment.trim().startsWith('/');
-    const isCommandInvoke = strippedComment.trim().startsWith('/command-invoke');
-
-    if (isSlashCommand) {
-      const firstLine = strippedComment.split('\n')[0].trim();
-      finalMessage = firstLine;
-      console.log(`[GitHub] Processing slash command: ${firstLine}`);
-
-      if (isCommandInvoke) {
-        const activeSession = await sessionDb.getActiveSession(existingConv.id);
-        const isFirstCommandInvoke = !activeSession;
-
-        if (isFirstCommandInvoke) {
-          console.log('[GitHub] Adding issue/PR reference for first /command-invoke');
-          if (eventType === 'issue' && issue) {
-            contextToAppend = `GitHub Issue #${String(issue.number)}: "${issue.title}"
-Use 'gh issue view ${String(issue.number)}' for full details if needed.`;
-          } else if (eventType === 'issue_comment' && issue) {
-            contextToAppend = `GitHub Issue #${String(issue.number)}: "${issue.title}"
-Use 'gh issue view ${String(issue.number)}' for full details if needed.`;
-          } else if (eventType === 'pull_request' && pullRequest) {
-            contextToAppend = `GitHub Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"
-Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
-          } else if (eventType === 'issue_comment' && pullRequest) {
-            contextToAppend = `GitHub Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"
-Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
-          }
-        }
-      }
-    } else if (isNewConversation) {
-      if (eventType === 'issue' && issue) {
-        const triageAnalysis = await this.generateIssueTriage(issue);
-        finalMessage = this.buildIssueContext(issue, strippedComment);
-        if (triageAnalysis) {
-          finalMessage += `
-
----${triageAnalysis}`;
-        }
-      } else if (eventType === 'issue_comment' && issue) {
-        finalMessage = this.buildIssueContext(issue, strippedComment);
-      } else if (eventType === 'pull_request' && pullRequest) {
-        finalMessage = this.buildPRContext(pullRequest, strippedComment);
-      } else if (eventType === 'issue_comment' && pullRequest) {
-        finalMessage = this.buildPRContext(pullRequest, strippedComment);
-      }
-    }
 
     try {
+      console.log(`[GitHub] Processing ${eventType}: ${owner}/${repo}#${String(number)}`);
+
+      const existingConv = await db.getOrCreateConversation('github', conversationId);
+      const isNewConversation = !existingConv.codebase_id;
+
+      const { codebase, repoPath, isNew: isNewCodebase } = await this.getOrCreateCodebaseForRepo(
+        owner,
+        repo
+      );
+
+      const { data: repoData } = await this.octokit.rest.repos.get({ owner, repo });
+      const defaultBranch = repoData.default_branch;
+      await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewConversation);
+
+      if (isNewCodebase) {
+        await this.autoDetectAndLoadCommands(repoPath, codebase.id);
+      }
+
+      if (isNewConversation) {
+        await db.updateConversation(existingConv.id, {
+          codebase_id: codebase.id,
+          cwd: repoPath,
+        });
+      }
+
+      const strippedComment = this.stripMention(comment);
+      let finalMessage = strippedComment;
+      let contextToAppend: string | undefined;
+
+      const isSlashCommand = strippedComment.trim().startsWith('/');
+      const isCommandInvoke = strippedComment.trim().startsWith('/command-invoke');
+
+      if (isSlashCommand) {
+        const firstLine = strippedComment.split('\n')[0].trim();
+        finalMessage = firstLine;
+        console.log(`[GitHub] Processing slash command: ${firstLine}`);
+
+        if (isCommandInvoke) {
+          const activeSession = await sessionDb.getActiveSession(existingConv.id);
+          const isFirstCommandInvoke = !activeSession;
+
+          if (isFirstCommandInvoke) {
+            console.log('[GitHub] Adding issue/PR reference for first /command-invoke');
+            if (eventType === 'issue' && issue) {
+              contextToAppend = `GitHub Issue #${String(issue.number)}: "${issue.title}"
+Use 'gh issue view ${String(issue.number)}' for full details if needed.`;
+            } else if (eventType === 'issue_comment' && issue) {
+              contextToAppend = `GitHub Issue #${String(issue.number)}: "${issue.title}"
+Use 'gh issue view ${String(issue.number)}' for full details if needed.`;
+            } else if (eventType === 'pull_request' && pullRequest) {
+              contextToAppend = `GitHub Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"
+Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
+            } else if (eventType === 'issue_comment' && pullRequest) {
+              contextToAppend = `GitHub Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"
+Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
+            }
+          }
+        }
+      } else if (isNewConversation) {
+        if (eventType === 'issue' && issue) {
+          const triageAnalysis = await this.generateIssueTriage(issue);
+          finalMessage = this.buildIssueContext(issue, strippedComment);
+          if (triageAnalysis) {
+            finalMessage += `
+
+---${triageAnalysis}`;
+          }
+        } else if (eventType === 'issue_comment' && issue) {
+          finalMessage = this.buildIssueContext(issue, strippedComment);
+        } else if (eventType === 'pull_request' && pullRequest) {
+          finalMessage = this.buildPRContext(pullRequest, strippedComment);
+        } else if (eventType === 'issue_comment' && pullRequest) {
+          finalMessage = this.buildPRContext(pullRequest, strippedComment);
+        }
+      }
+
       await handleMessage(this, conversationId, finalMessage, contextToAppend);
       await webhookDb.finalizeWebhookRun(runId, 'executed');
     } catch (error) {
@@ -687,10 +687,7 @@ Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
         failure.shouldPause ? 'paused' : 'blocked_policy',
         failure.shouldPause ? 'repeated_failure_signature' : 'processing_error'
       );
-      await this.sendMessage(
-        conversationId,
-        '⚠️ An error occurred. Please try again or use /reset.'
-      );
+      await this.sendMessage(conversationId, 'Warning: an error occurred. Please try again or use /reset.');
     }
   }
 }

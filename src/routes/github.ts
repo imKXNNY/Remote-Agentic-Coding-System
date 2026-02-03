@@ -98,8 +98,8 @@ router.get('/github/issues', asyncHandler(getGithubIssuesHandler));
  * Query params: limit (optional, 1..200)
  */
 export async function getGithubWebhookRunsHandler(req: Request, res: Response): Promise<void> {
-  const rawLimit = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 50;
-  const limit = Number.isFinite(rawLimit) ? rawLimit : 50;
+  const parsedLimit = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 50;
+  const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 200) : 50;
   const rows = await listRecentWebhookRuns(limit);
   res.json(rows);
 }

@@ -43,5 +43,8 @@ CREATE INDEX IF NOT EXISTS idx_remote_agent_automation_runs_chain_created
 CREATE INDEX IF NOT EXISTS idx_remote_agent_automation_runs_expires
   ON remote_agent_automation_runs(expires_at);
 
+CREATE INDEX IF NOT EXISTS idx_remote_agent_automation_runs_status_created
+  ON remote_agent_automation_runs(status, created_at DESC);
+
 CREATE INDEX IF NOT EXISTS idx_remote_agent_automation_chains_status
   ON remote_agent_automation_chains(status, updated_at DESC);

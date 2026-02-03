@@ -84,23 +84,13 @@ export async function intakeWebhookRun(input: IntakeWebhookRunInput): Promise<In
     const chain = await upsertChain(client, input);
     const chainAfterWindowReset = await maybeResetIterationWindow(client, chain);
 
-    const existingDedupe = await client.query<WebhookRun>(
-      `SELECT *
-       FROM remote_agent_automation_runs
-       WHERE dedupe_key = $1
-         AND (expires_at IS NULL OR expires_at > NOW())
-       ORDER BY created_at DESC
-       LIMIT 1`,
-      [input.dedupeKey]
-    );
-
-    if (existingDedupe.rows[0]) {
-      const existing = existingDedupe.rows[0];
+    const existingDedupe = await findExistingDedupeRun(client, input.dedupeKey);
+    if (existingDedupe) {
       await client.query('COMMIT');
 
       return {
-        decision: isTerminalWebhookRunStatus(existing.status) ? 'deduped' : 'replay_inflight',
-        run: existing,
+        decision: isTerminalWebhookRunStatus(existingDedupe.status) ? 'deduped' : 'replay_inflight',
+        run: existingDedupe,
         chain: chainAfterWindowReset,
       };
     }
@@ -139,6 +129,18 @@ export async function intakeWebhookRun(input: IntakeWebhookRunInput): Promise<In
         reason: guardrail.reason,
         isMutating: input.isMutating,
       });
+      if (!pausedRun) {
+        const replay = await findExistingDedupeRun(client, input.dedupeKey);
+        if (replay) {
+          await client.query('COMMIT');
+          return {
+            decision: isTerminalWebhookRunStatus(replay.status) ? 'deduped' : 'replay_inflight',
+            run: replay,
+            chain: chainAfterWindowReset,
+          };
+        }
+        throw new Error('Failed to insert paused webhook run and no existing dedupe run found');
+      }
 
       await client.query(
         `UPDATE remote_agent_automation_chains
@@ -163,6 +165,18 @@ export async function intakeWebhookRun(input: IntakeWebhookRunInput): Promise<In
       reason: null,
       isMutating: input.isMutating,
     });
+    if (!acceptedRun) {
+      const replay = await findExistingDedupeRun(client, input.dedupeKey);
+      if (replay) {
+        await client.query('COMMIT');
+        return {
+          decision: isTerminalWebhookRunStatus(replay.status) ? 'deduped' : 'replay_inflight',
+          run: replay,
+          chain: chainAfterWindowReset,
+        };
+      }
+      throw new Error('Failed to insert accepted webhook run and no existing dedupe run found');
+    }
 
     const updatedChainResult = await client.query<WebhookChain>(
       `UPDATE remote_agent_automation_chains
@@ -224,40 +238,54 @@ export async function registerWebhookFailure(
   errorMessage: string
 ): Promise<{ shouldPause: boolean; failureSignature: string }> {
   const signature = buildFailureSignature(errorMessage, 1, []);
+  const client = await pool.connect();
 
-  const current = await pool.query<Pick<WebhookChain, 'last_failure_signature' | 'repeated_failure_count'>>(
-    `SELECT last_failure_signature, repeated_failure_count
-     FROM remote_agent_automation_chains
-     WHERE id = $1`,
-    [chainId]
-  );
+  try {
+    await client.query('BEGIN');
 
-  const row = current.rows[0];
-  if (!row) {
-    return { shouldPause: false, failureSignature: signature };
+    const chainUpdate = await client.query<{ repeated_failure_count: number }>(
+      `UPDATE remote_agent_automation_chains
+       SET last_failure_signature = $2,
+           repeated_failure_count = CASE
+             WHEN last_failure_signature = $2 THEN repeated_failure_count + 1
+             ELSE 1
+           END,
+           status = CASE
+             WHEN (
+               CASE
+                 WHEN last_failure_signature = $2 THEN repeated_failure_count + 1
+                 ELSE 1
+               END
+             ) >= 2
+               THEN 'paused'
+             ELSE status
+           END,
+           updated_at = NOW()
+       WHERE id = $1
+       RETURNING repeated_failure_count`,
+      [chainId, signature]
+    );
+
+    await client.query(
+      `UPDATE remote_agent_automation_runs
+       SET failure_signature = $2
+       WHERE id = $1`,
+      [runId, signature]
+    );
+
+    await client.query('COMMIT');
+
+    const repeatCount = chainUpdate.rows[0]?.repeated_failure_count;
+    if (!repeatCount) {
+      return { shouldPause: false, failureSignature: signature };
+    }
+    return { shouldPause: repeatCount >= 2, failureSignature: signature };
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
   }
-
-  const repeatCount = row.last_failure_signature === signature ? row.repeated_failure_count + 1 : 1;
-  const shouldPause = repeatCount >= 2;
-
-  await pool.query(
-    `UPDATE remote_agent_automation_chains
-     SET last_failure_signature = $2,
-         repeated_failure_count = $3,
-         status = CASE WHEN $4::boolean THEN 'paused' ELSE status END,
-         updated_at = NOW()
-     WHERE id = $1`,
-    [chainId, signature, repeatCount, shouldPause]
-  );
-
-  await pool.query(
-    `UPDATE remote_agent_automation_runs
-     SET failure_signature = $2
-     WHERE id = $1`,
-    [runId, signature]
-  );
-
-  return { shouldPause, failureSignature: signature };
 }
 
 export async function listRecentWebhookRuns(limit = 50): Promise<WebhookRun[]> {
@@ -284,12 +312,29 @@ interface InsertRunInput {
   isMutating: boolean;
 }
 
-async function insertRun(client: { query: typeof pool.query }, input: InsertRunInput): Promise<WebhookRun> {
+async function findExistingDedupeRun(
+  client: { query: typeof pool.query },
+  dedupeKey: string
+): Promise<WebhookRun | null> {
+  const existing = await client.query<WebhookRun>(
+    `SELECT *
+     FROM remote_agent_automation_runs
+     WHERE dedupe_key = $1
+       AND (expires_at IS NULL OR expires_at > NOW())
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [dedupeKey]
+  );
+  return existing.rows[0] ?? null;
+}
+
+async function insertRun(client: { query: typeof pool.query }, input: InsertRunInput): Promise<WebhookRun | null> {
   const result = await client.query<WebhookRun>(
     `INSERT INTO remote_agent_automation_runs
       (chain_id, delivery_id, dedupe_key, event_type, action, head_sha, status, reason, is_mutating, started_at, expires_at)
      VALUES
       ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW() + INTERVAL '24 hours')
+     ON CONFLICT (dedupe_key) DO NOTHING
      RETURNING *`,
     [
       input.chainId,
@@ -304,7 +349,7 @@ async function insertRun(client: { query: typeof pool.query }, input: InsertRunI
     ]
   );
 
-  return result.rows[0];
+  return result.rows[0] ?? null;
 }
 
 async function upsertChain(

@@ -27,6 +27,7 @@ export async function ensureSchemaCompatibility(): Promise<void> {
   `);
 
   await pool.query(`
+    -- Keep this runtime DDL in sync with migrations/009_webhook_control_plane.sql.
     CREATE TABLE IF NOT EXISTS remote_agent_automation_chains (
       id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       platform_type VARCHAR(20) NOT NULL,
@@ -73,6 +74,10 @@ export async function ensureSchemaCompatibility(): Promise<void> {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_remote_agent_automation_runs_expires
       ON remote_agent_automation_runs(expires_at)
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_remote_agent_automation_runs_status_created
+      ON remote_agent_automation_runs(status, created_at DESC)
   `);
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_remote_agent_automation_chains_status

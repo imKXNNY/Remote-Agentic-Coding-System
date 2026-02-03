@@ -159,4 +159,30 @@ describe('github webhook runs route', () => {
 
     expect(listRecentWebhookRuns).toHaveBeenCalledWith(10);
   });
+
+  test('defaults to 50 when limit is not numeric', async () => {
+    const req = { query: { limit: 'abc' } } as unknown as Request;
+    const res = createResponse();
+
+    await getGithubWebhookRunsHandler(req, res);
+
+    expect(listRecentWebhookRuns).toHaveBeenCalledWith(50);
+  });
+
+  test('clamps limit to upper bound', async () => {
+    const req = { query: { limit: '999' } } as unknown as Request;
+    const res = createResponse();
+
+    await getGithubWebhookRunsHandler(req, res);
+
+    expect(listRecentWebhookRuns).toHaveBeenCalledWith(200);
+  });
+
+  test('propagates query failures for async handler middleware', async () => {
+    (listRecentWebhookRuns as unknown as jest.Mock).mockRejectedValueOnce(new Error('db unavailable'));
+    const req = { query: {} } as unknown as Request;
+    const res = createResponse();
+
+    await expect(getGithubWebhookRunsHandler(req, res)).rejects.toThrow('db unavailable');
+  });
 });
