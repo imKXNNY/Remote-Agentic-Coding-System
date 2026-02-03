@@ -47,6 +47,8 @@ Choose **B) Partial adaptation**.
 - Best fit for current architecture and operating model.
 - Lowest implementation risk while still extracting value.
 - Clear path to improve planning/execution quality without replacing stable workflows.
+- Supported by research showing strong process overlap but runtime divergence for Claude/Gemini-oriented usage:
+  - `docs/Get-Shit-Done/research/claude-gemini-overlap-divergence.md`
 
 ## Migration Effort Estimate
 - Phase 1 (mapping/design): low
