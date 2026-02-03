@@ -54,9 +54,10 @@ After each mutating run (commit/push/PR update), enforce cooldown:
 
 ### Policy inputs
 - **Allowed repositories**: explicit allowlist only.
-- **Allowed target branches**: `feature/*`, `fix/*`, optional `chore/*`; deny direct writes to `stable`/`main`.
+- **Allowed target branches**: `feature/*`, `fix/*`, `chore/*` (configurable per-repo); deny direct writes to `stable`/`main`.
 - **Command allowlist**: only vetted workflow commands (`prime`, `plan-feature`, `execute`, `code-review`, `validate-simple`, `execution-report`).
-- **Protected-path policy**: block automation writes for secrets/config critical paths (for example `.env`, credentials, deploy keys, infra secrets).
+- **Protected-path policy**: block automation writes for secrets/config critical paths. Examples include `.env`, credential files, deploy keys, and infra secrets; each repository defines concrete protected path patterns in policy config.
+- **Bot denylist**: maintained as policy configuration for known automation/bot accounts to prevent bot-to-bot loops.
 
 ### Risk tiers
 - **Low risk**: docs changes, test-only changes, report generation.
@@ -70,6 +71,8 @@ Default autonomy:
 
 ## Human Override and Escalation
 
+Authorized maintainer: a repository maintainer with write/admin permissions who is allowed by automation policy to execute override commands.
+
 ### Required human approval
 - High-risk mutations.
 - Runs exceeding iteration budget.
@@ -80,7 +83,8 @@ Default autonomy:
 - `@remote-agent approve-run <run-id>`
 - `@remote-agent pause-loop <chain-id>`
 - `@remote-agent resume-loop <chain-id>`
-- `@remote-agent disable-auto <repo|issue|pr>`
+- `@remote-agent override-cooldown <chain-id>`
+- `@remote-agent disable-auto <scope>` where scope is one of: `repo`, `issue`, `pr`
 
 ## Observability and Traceability
 
