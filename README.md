@@ -716,6 +716,7 @@ Further reading:
 - Core architecture guide: `docs/architecture.md`
 - OpenClaw research and integration decision: `docs/OpenClaw/README.md`
 - Get-shit-done evaluation and adoption decision: `docs/Get-Shit-Done/README.md`
+- Webhook autonomy guardrails design: `docs/automation/README.md`
 
 ### System Overview
 
