@@ -1,0 +1,50 @@
+-- Migration 009: Webhook control-plane primitives
+-- Adds durable run/chain state for idempotency, replay safety, and loop guardrails.
+
+CREATE TABLE IF NOT EXISTS remote_agent_automation_chains (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  platform_type VARCHAR(20) NOT NULL,
+  conversation_id VARCHAR(255) NOT NULL,
+  repository_full_name VARCHAR(255) NOT NULL,
+  object_type VARCHAR(40) NOT NULL,
+  object_number INTEGER NOT NULL,
+  status VARCHAR(30) NOT NULL DEFAULT 'active',
+  iteration_count INTEGER NOT NULL DEFAULT 0,
+  iteration_window_started_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  cooldown_until TIMESTAMP WITH TIME ZONE,
+  last_failure_signature VARCHAR(128),
+  repeated_failure_count INTEGER NOT NULL DEFAULT 0,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  UNIQUE(platform_type, conversation_id)
+);
+
+CREATE TABLE IF NOT EXISTS remote_agent_automation_runs (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  chain_id UUID NOT NULL REFERENCES remote_agent_automation_chains(id) ON DELETE CASCADE,
+  delivery_id VARCHAR(255) NOT NULL,
+  dedupe_key TEXT NOT NULL UNIQUE,
+  event_type VARCHAR(50) NOT NULL,
+  action VARCHAR(50),
+  head_sha VARCHAR(64),
+  status VARCHAR(30) NOT NULL,
+  reason TEXT,
+  is_mutating BOOLEAN NOT NULL DEFAULT false,
+  failure_signature VARCHAR(128),
+  started_at TIMESTAMP WITH TIME ZONE,
+  finished_at TIMESTAMP WITH TIME ZONE,
+  expires_at TIMESTAMP WITH TIME ZONE,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_remote_agent_automation_runs_chain_created
+  ON remote_agent_automation_runs(chain_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_remote_agent_automation_runs_expires
+  ON remote_agent_automation_runs(expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_remote_agent_automation_runs_status_created
+  ON remote_agent_automation_runs(status, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_remote_agent_automation_chains_status
+  ON remote_agent_automation_chains(status, updated_at DESC);

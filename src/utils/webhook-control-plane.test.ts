@@ -1,0 +1,100 @@
+import {
+  buildFailureSignature,
+  buildWebhookDedupeKey,
+  deriveWebhookDeliveryId,
+  evaluateWebhookGuardrails,
+  isTerminalWebhookRunStatus,
+} from './webhook-control-plane';
+
+describe('webhook control-plane utils', () => {
+  test('buildWebhookDedupeKey includes all required dimensions', () => {
+    const key = buildWebhookDedupeKey({
+      deliveryId: 'abc-123',
+      repositoryFullName: 'imKXNNY/Remote-Agentic-Coding-System',
+      objectType: 'issue_comment',
+      objectNumber: 30,
+      action: 'created',
+      headSha: 'deadbeef',
+    });
+
+    expect(key).toBe(
+      'abc-123:imKXNNY/Remote-Agentic-Coding-System:issue_comment:30:created:deadbeef'
+    );
+  });
+
+  test('deriveWebhookDeliveryId falls back to payload hash when header is missing', () => {
+    const payload = '{"hello":"world"}';
+    const idA = deriveWebhookDeliveryId(payload);
+    const idB = deriveWebhookDeliveryId(payload);
+
+    expect(idA).toMatch(/^payload-[a-f0-9]{16}$/);
+    expect(idA).toBe(idB);
+  });
+
+  test('evaluateWebhookGuardrails blocks paused chains', () => {
+    const result = evaluateWebhookGuardrails({
+      chainStatus: 'paused',
+      isMutating: false,
+      now: new Date('2026-02-03T00:00:00Z'),
+      cooldownUntil: null,
+      iterationCount: 0,
+      maxIterations: 3,
+      mutatingRuns24h: 0,
+      maxMutatingRuns24h: 5,
+    });
+
+    expect(result).toEqual({ allowed: false, reason: 'chain_paused' });
+  });
+
+  test('evaluateWebhookGuardrails blocks iteration budget overflow', () => {
+    const result = evaluateWebhookGuardrails({
+      chainStatus: 'active',
+      isMutating: false,
+      now: new Date('2026-02-03T00:00:00Z'),
+      cooldownUntil: null,
+      iterationCount: 3,
+      maxIterations: 3,
+      mutatingRuns24h: 0,
+      maxMutatingRuns24h: 5,
+    });
+
+    expect(result).toEqual({ allowed: false, reason: 'iteration_budget_exceeded' });
+  });
+
+  test('evaluateWebhookGuardrails blocks cooldown and mutating-run budgets', () => {
+    const now = new Date('2026-02-03T00:00:00Z');
+
+    const cooldownBlocked = evaluateWebhookGuardrails({
+      chainStatus: 'active',
+      isMutating: true,
+      now,
+      cooldownUntil: new Date('2026-02-03T00:05:00Z'),
+      iterationCount: 0,
+      maxIterations: 3,
+      mutatingRuns24h: 0,
+      maxMutatingRuns24h: 5,
+    });
+    expect(cooldownBlocked).toEqual({ allowed: false, reason: 'cooldown_active' });
+
+    const budgetBlocked = evaluateWebhookGuardrails({
+      chainStatus: 'active',
+      isMutating: true,
+      now,
+      cooldownUntil: null,
+      iterationCount: 0,
+      maxIterations: 3,
+      mutatingRuns24h: 5,
+      maxMutatingRuns24h: 5,
+    });
+    expect(budgetBlocked).toEqual({ allowed: false, reason: 'mutating_budget_exceeded' });
+  });
+
+  test('buildFailureSignature is stable and terminal status check works', () => {
+    const a = buildFailureSignature('pytest failed', 1, ['test_b', 'test_a']);
+    const b = buildFailureSignature('pytest failed', 1, ['test_a', 'test_b']);
+
+    expect(a).toBe(b);
+    expect(isTerminalWebhookRunStatus('executed')).toBe(true);
+    expect(isTerminalWebhookRunStatus('accepted')).toBe(false);
+  });
+});

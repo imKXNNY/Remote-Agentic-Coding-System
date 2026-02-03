@@ -1,9 +1,13 @@
 import type { Request, Response } from 'express';
 import { Octokit } from '@octokit/rest';
-import { getGithubIssuesHandler } from './github';
+import { getGithubIssuesHandler, getGithubWebhookRunsHandler } from './github';
+import { listRecentWebhookRuns } from '../db/webhook-control-plane';
 
 jest.mock('@octokit/rest', () => ({
   Octokit: jest.fn(),
+}));
+jest.mock('../db/webhook-control-plane', () => ({
+  listRecentWebhookRuns: jest.fn().mockResolvedValue([]),
 }));
 
 type MockResponse = Response & {
@@ -128,5 +132,57 @@ describe('github route auth diagnostics', () => {
         code: 'GITHUB_AUTH_FAILED',
       })
     );
+  });
+});
+
+describe('github webhook runs route', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('returns latest webhook runs with default limit', async () => {
+    (listRecentWebhookRuns as unknown as jest.Mock).mockResolvedValueOnce([{ id: 'run-1' }]);
+    const req = { query: {} } as unknown as Request;
+    const res = createResponse();
+
+    await getGithubWebhookRunsHandler(req, res);
+
+    expect(listRecentWebhookRuns).toHaveBeenCalledWith(50);
+    expect(res.json).toHaveBeenCalledWith([{ id: 'run-1' }]);
+  });
+
+  test('supports explicit numeric limit', async () => {
+    const req = { query: { limit: '10' } } as unknown as Request;
+    const res = createResponse();
+
+    await getGithubWebhookRunsHandler(req, res);
+
+    expect(listRecentWebhookRuns).toHaveBeenCalledWith(10);
+  });
+
+  test('defaults to 50 when limit is not numeric', async () => {
+    const req = { query: { limit: 'abc' } } as unknown as Request;
+    const res = createResponse();
+
+    await getGithubWebhookRunsHandler(req, res);
+
+    expect(listRecentWebhookRuns).toHaveBeenCalledWith(50);
+  });
+
+  test('clamps limit to upper bound', async () => {
+    const req = { query: { limit: '999' } } as unknown as Request;
+    const res = createResponse();
+
+    await getGithubWebhookRunsHandler(req, res);
+
+    expect(listRecentWebhookRuns).toHaveBeenCalledWith(200);
+  });
+
+  test('propagates query failures for async handler middleware', async () => {
+    (listRecentWebhookRuns as unknown as jest.Mock).mockRejectedValueOnce(new Error('db unavailable'));
+    const req = { query: {} } as unknown as Request;
+    const res = createResponse();
+
+    await expect(getGithubWebhookRunsHandler(req, res)).rejects.toThrow('db unavailable');
   });
 });
