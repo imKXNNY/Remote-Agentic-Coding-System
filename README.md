@@ -847,6 +847,17 @@ cat .env | grep GH_TOKEN
 # Should have both GH_TOKEN and GITHUB_TOKEN set
 ```
 
+**Check runtime preflight diagnostics:**
+```bash
+# Use the service name matching your profile
+docker compose logs app | grep "GitHub] Auth preflight"          # --profile external-db
+docker compose logs app-with-db | grep "GitHub] Auth preflight"  # --profile with-db
+```
+
+If auth is unavailable, `GET /api/github/issues` now returns a deterministic `503` payload with code:
+- `GITHUB_AUTH_UNAVAILABLE` (missing/malformed token)
+- `GITHUB_AUTH_FAILED` (upstream GitHub rejected token/scopes)
+
 **Test token validity:**
 ```bash
 # Test GitHub API access
