@@ -9,10 +9,15 @@ import { handleMessage } from '../orchestrator/orchestrator';
 import * as db from '../db/conversations';
 import * as codebaseDb from '../db/codebases';
 import * as sessionDb from '../db/sessions';
+import * as webhookDb from '../db/webhook-control-plane';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { readdir, access } from 'fs/promises';
 import { join } from 'path';
+import {
+  buildWebhookDedupeKey,
+  deriveWebhookDeliveryId,
+} from '../utils/webhook-control-plane';
 
 const execAsync = promisify(exec);
 
@@ -32,6 +37,7 @@ interface WebhookEvent {
     body: string | null;
     user: { login: string };
     state: string;
+    head?: { sha: string };
     changed_files?: number;
     additions?: number;
     deletions?: number;
@@ -56,6 +62,33 @@ interface TriageResult {
   estimated_effort: string;
   suggested_labels: string[];
   technical_summary: string;
+}
+
+interface WebhookMetadata {
+  deliveryId?: string;
+  eventName?: string;
+}
+
+interface WebhookProcessContext {
+  runId: string;
+  chainId: string;
+  event: WebhookEvent;
+  parsed: {
+    owner: string;
+    repo: string;
+    number: number;
+    comment: string;
+    eventType: 'issue' | 'issue_comment' | 'pull_request';
+    issue?: WebhookEvent['issue'];
+    pullRequest?: WebhookEvent['pull_request'];
+  };
+}
+
+interface WebhookIntakeResult {
+  httpStatus: number;
+  body: Record<string, unknown>;
+  shouldProcess: boolean;
+  context?: WebhookProcessContext;
 }
 
 export class GitHubAdapter implements IPlatformAdapter {
@@ -428,57 +461,162 @@ ${triage.technical_summary}
     }
   }
 
+
   /**
-   * Handle incoming webhook event
+   * Ingest incoming webhook quickly and decide deterministic intake status.
    */
-  async handleWebhook(
+  async ingestWebhook(
     payload: string,
-    signature: string
-  ): Promise<void> {
-    // 1. Verify signature
+    signature: string,
+    metadata: WebhookMetadata = {}
+  ): Promise<WebhookIntakeResult> {
     if (!this.verifySignature(payload, signature)) {
       console.error('[GitHub] Invalid webhook signature');
-      return;
+      return {
+        httpStatus: 401,
+        body: { status: 'invalid_signature' },
+        shouldProcess: false,
+      };
     }
 
-    // 2. Parse event
-    const event: WebhookEvent = JSON.parse(payload);
+    let event: WebhookEvent;
+    try {
+      event = JSON.parse(payload) as WebhookEvent;
+    } catch {
+      return {
+        httpStatus: 400,
+        body: { status: 'invalid_payload' },
+        shouldProcess: false,
+      };
+    }
+
     const parsed = this.parseEvent(event);
-    if (!parsed) return;
+    if (!parsed) {
+      return {
+        httpStatus: 202,
+        body: { status: 'ignored', reason: 'unsupported_event' },
+        shouldProcess: false,
+      };
+    }
 
     const { owner, repo, number, comment, eventType, issue, pullRequest } = parsed;
+    if (!this.hasMention(comment)) {
+      return {
+        httpStatus: 202,
+        body: { status: 'ignored', reason: 'missing_mention' },
+        shouldProcess: false,
+      };
+    }
 
-    // 3. Check @mention
-    if (!this.hasMention(comment)) return;
-
-    console.log(`[GitHub] Processing ${eventType}: ${owner}/${repo}#${number}`);
-
-    // 4. Build conversationId
     const conversationId = this.buildConversationId(owner, repo, number);
+    const deliveryId = deriveWebhookDeliveryId(payload, metadata.deliveryId);
+    const headSha = pullRequest?.head?.sha ?? null;
+    const dedupeKey = buildWebhookDedupeKey({
+      deliveryId,
+      repositoryFullName: event.repository.full_name,
+      objectType: eventType,
+      objectNumber: number,
+      action: event.action,
+      headSha,
+    });
 
-    // 5. Check if new conversation
+    const strippedComment = this.stripMention(comment);
+    const isMutating = strippedComment.startsWith('/command-invoke');
+
+    const intake = await webhookDb.intakeWebhookRun({
+      platformType: 'github',
+      conversationId,
+      repositoryFullName: event.repository.full_name,
+      objectType: eventType,
+      objectNumber: number,
+      deliveryId,
+      dedupeKey,
+      eventType: metadata.eventName ?? eventType,
+      action: event.action,
+      headSha,
+      isMutating,
+    });
+
+    if (intake.decision === 'deduped') {
+      return {
+        httpStatus: 200,
+        body: { status: 'deduped', chainId: intake.chain.id, runId: intake.run?.id ?? null },
+        shouldProcess: false,
+      };
+    }
+
+    if (intake.decision === 'replay_inflight') {
+      return {
+        httpStatus: 202,
+        body: {
+          status: 'already_processing',
+          chainId: intake.chain.id,
+          runId: intake.run?.id ?? null,
+        },
+        shouldProcess: false,
+      };
+    }
+
+    if (intake.decision === 'paused' || !intake.run) {
+      return {
+        httpStatus: 202,
+        body: {
+          status: 'paused',
+          reason: intake.run?.reason ?? intake.reason ?? 'guardrail_triggered',
+          chainId: intake.chain.id,
+          runId: intake.run?.id ?? null,
+        },
+        shouldProcess: false,
+      };
+    }
+
+    return {
+      httpStatus: 202,
+      body: { status: 'accepted', chainId: intake.chain.id, runId: intake.run.id },
+      shouldProcess: true,
+      context: {
+        runId: intake.run.id,
+        chainId: intake.chain.id,
+        event,
+        parsed: {
+          owner,
+          repo,
+          number,
+          comment,
+          eventType,
+          issue,
+          pullRequest,
+        },
+      },
+    };
+  }
+
+  /**
+   * Process an accepted webhook asynchronously.
+   */
+  async processWebhook(context: WebhookProcessContext): Promise<void> {
+    const { runId, chainId, parsed } = context;
+    const { owner, repo, number, comment, eventType, issue, pullRequest } = parsed;
+
+    console.log(`[GitHub] Processing ${eventType}: ${owner}/${repo}#${String(number)}`);
+
+    const conversationId = this.buildConversationId(owner, repo, number);
     const existingConv = await db.getOrCreateConversation('github', conversationId);
     const isNewConversation = !existingConv.codebase_id;
 
-    // 6. Get/create codebase (checks for existing first!)
     const { codebase, repoPath, isNew: isNewCodebase } = await this.getOrCreateCodebaseForRepo(
       owner,
       repo
     );
 
-    // 7. Get default branch
     const { data: repoData } = await this.octokit.rest.repos.get({ owner, repo });
     const defaultBranch = repoData.default_branch;
-
-    // 8. Ensure repo ready (clone if needed, sync if new conversation)
     await this.ensureRepoReady(owner, repo, defaultBranch, repoPath, isNewConversation);
 
-    // 9. Auto-load commands if new codebase
     if (isNewCodebase) {
       await this.autoDetectAndLoadCommands(repoPath, codebase.id);
     }
 
-    // 10. Update conversation
     if (isNewConversation) {
       await db.updateConversation(existingConv.id, {
         codebase_id: codebase.id,
@@ -486,24 +624,18 @@ ${triage.technical_summary}
       });
     }
 
-    // 11. Build message with context
     const strippedComment = this.stripMention(comment);
     let finalMessage = strippedComment;
     let contextToAppend: string | undefined;
 
-    // IMPORTANT: Slash commands must be processed deterministically (not by AI)
-    // Extract only the first line if it's a slash command
     const isSlashCommand = strippedComment.trim().startsWith('/');
     const isCommandInvoke = strippedComment.trim().startsWith('/command-invoke');
 
     if (isSlashCommand) {
-      // For slash commands, use only the first line to avoid mixing commands with instructions
       const firstLine = strippedComment.split('\n')[0].trim();
       finalMessage = firstLine;
       console.log(`[GitHub] Processing slash command: ${firstLine}`);
 
-      // For /command-invoke, pass just the issue/PR number (not full description)
-      // This avoids tempting the AI to implement before planning
       if (isCommandInvoke) {
         const activeSession = await sessionDb.getActiveSession(existingConv.id);
         const isFirstCommandInvoke = !activeSession;
@@ -511,24 +643,28 @@ ${triage.technical_summary}
         if (isFirstCommandInvoke) {
           console.log('[GitHub] Adding issue/PR reference for first /command-invoke');
           if (eventType === 'issue' && issue) {
-            contextToAppend = `GitHub Issue #${issue.number}: "${issue.title}"\nUse 'gh issue view ${issue.number}' for full details if needed.`;
+            contextToAppend = `GitHub Issue #${String(issue.number)}: "${issue.title}"
+Use 'gh issue view ${String(issue.number)}' for full details if needed.`;
           } else if (eventType === 'issue_comment' && issue) {
-            contextToAppend = `GitHub Issue #${issue.number}: "${issue.title}"\nUse 'gh issue view ${issue.number}' for full details if needed.`;
+            contextToAppend = `GitHub Issue #${String(issue.number)}: "${issue.title}"
+Use 'gh issue view ${String(issue.number)}' for full details if needed.`;
           } else if (eventType === 'pull_request' && pullRequest) {
-            contextToAppend = `GitHub Pull Request #${pullRequest.number}: "${pullRequest.title}"\nUse 'gh pr view ${pullRequest.number}' for full details if needed.`;
+            contextToAppend = `GitHub Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"
+Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
           } else if (eventType === 'issue_comment' && pullRequest) {
-            contextToAppend = `GitHub Pull Request #${pullRequest.number}: "${pullRequest.title}"\nUse 'gh pr view ${pullRequest.number}' for full details if needed.`;
+            contextToAppend = `GitHub Pull Request #${String(pullRequest.number)}: "${pullRequest.title}"
+Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
           }
         }
       }
-      } else if (isNewConversation) {
-      // For non-command messages, add issue/PR context directly
+    } else if (isNewConversation) {
       if (eventType === 'issue' && issue) {
         const triageAnalysis = await this.generateIssueTriage(issue);
         finalMessage = this.buildIssueContext(issue, strippedComment);
-        
         if (triageAnalysis) {
-          finalMessage += `\n\n---${triageAnalysis}`;
+          finalMessage += `
+
+---${triageAnalysis}`;
         }
       } else if (eventType === 'issue_comment' && issue) {
         finalMessage = this.buildIssueContext(issue, strippedComment);
@@ -539,11 +675,18 @@ ${triage.technical_summary}
       }
     }
 
-    // 12. Route to orchestrator
     try {
       await handleMessage(this, conversationId, finalMessage, contextToAppend);
+      await webhookDb.finalizeWebhookRun(runId, 'executed');
     } catch (error) {
       console.error('[GitHub] Message handling error:', error);
+      const message = error instanceof Error ? error.message : String(error);
+      const failure = await webhookDb.registerWebhookFailure(chainId, runId, message);
+      await webhookDb.finalizeWebhookRun(
+        runId,
+        failure.shouldPause ? 'paused' : 'blocked_policy',
+        failure.shouldPause ? 'repeated_failure_signature' : 'processing_error'
+      );
       await this.sendMessage(
         conversationId,
         '⚠️ An error occurred. Please try again or use /reset.'

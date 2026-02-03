@@ -8,6 +8,7 @@ import {
   getGitHubApiErrorStatus,
   getGitHubAuthPreflight,
 } from '../utils/github-auth';
+import { listRecentWebhookRuns } from '../db/webhook-control-plane';
 
 const router = Router();
 
@@ -90,5 +91,19 @@ export async function getGithubIssuesHandler(req: Request, res: Response): Promi
 }
 
 router.get('/github/issues', asyncHandler(getGithubIssuesHandler));
+
+/**
+ * GET /api/github/webhook-runs
+ * Returns latest webhook control-plane runs for audit/debug.
+ * Query params: limit (optional, 1..200)
+ */
+export async function getGithubWebhookRunsHandler(req: Request, res: Response): Promise<void> {
+  const rawLimit = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 50;
+  const limit = Number.isFinite(rawLimit) ? rawLimit : 50;
+  const rows = await listRecentWebhookRuns(limit);
+  res.json(rows);
+}
+
+router.get('/github/webhook-runs', asyncHandler(getGithubWebhookRunsHandler));
 
 export default router;

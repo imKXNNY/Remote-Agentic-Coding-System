@@ -151,13 +151,18 @@ async function main(): Promise<void> {
         }
 
         const payload = (req.body as Buffer).toString('utf-8');
-
-        // Process async (fire-and-forget for fast webhook response)
-        github.handleWebhook(payload, signature).catch(error => {
-          console.error('[GitHub] Webhook processing error:', error);
+        const intake = await github.ingestWebhook(payload, signature, {
+          deliveryId: typeof req.headers['x-github-delivery'] === 'string' ? req.headers['x-github-delivery'] : undefined,
+          eventName: typeof req.headers['x-github-event'] === 'string' ? req.headers['x-github-event'] : undefined,
         });
 
-        res.status(200).send('OK');
+        if (intake.shouldProcess && intake.context) {
+          github.processWebhook(intake.context).catch(error => {
+            console.error('[GitHub] Webhook processing error:', error);
+          });
+        }
+
+        res.status(intake.httpStatus).json(intake.body);
       } catch (error) {
         console.error('[GitHub] Webhook endpoint error:', error);
         res.status(500).json({ error: 'Internal server error' });
