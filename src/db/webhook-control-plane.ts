@@ -82,7 +82,18 @@ export async function intakeWebhookRun(input: IntakeWebhookRunInput): Promise<In
     await client.query('BEGIN');
 
     const chain = await upsertChain(client, input);
-    const chainAfterWindowReset = await maybeResetIterationWindow(client, chain);
+    const lockedChainResult = await client.query<WebhookChain>(
+      `SELECT *
+       FROM remote_agent_automation_chains
+       WHERE id = $1
+       FOR UPDATE`,
+      [chain.id]
+    );
+    const lockedChain = lockedChainResult.rows[0];
+    if (!lockedChain) {
+      throw new Error(`Webhook chain not found after upsert: ${chain.id}`);
+    }
+    const chainAfterWindowReset = await maybeResetIterationWindow(client, lockedChain);
 
     const existingDedupe = await findExistingDedupeRun(client, input.dedupeKey);
     if (existingDedupe) {
@@ -142,16 +153,23 @@ export async function intakeWebhookRun(input: IntakeWebhookRunInput): Promise<In
         throw new Error('Failed to insert paused webhook run and no existing dedupe run found');
       }
 
-      await client.query(
-        `UPDATE remote_agent_automation_chains
-         SET status = 'paused',
-             updated_at = NOW()
-         WHERE id = $1`,
-        [chainAfterWindowReset.id]
-      );
+      const shouldPauseChain = guardrail.reason === 'chain_paused';
+      if (shouldPauseChain) {
+        await client.query(
+          `UPDATE remote_agent_automation_chains
+           SET status = 'paused',
+               updated_at = NOW()
+           WHERE id = $1`,
+          [chainAfterWindowReset.id]
+        );
+      }
 
       await client.query('COMMIT');
-      return { decision: 'paused', run: pausedRun, chain: { ...chainAfterWindowReset, status: 'paused' } };
+      return {
+        decision: 'paused',
+        run: pausedRun,
+        chain: shouldPauseChain ? { ...chainAfterWindowReset, status: 'paused' } : chainAfterWindowReset,
+      };
     }
 
     const acceptedRun = await insertRun(client, {

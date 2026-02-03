@@ -12,6 +12,8 @@ import { pool } from './connection';
  * - remote_agent_conversations.bootstrap_status VARCHAR(20) DEFAULT 'pending'
  */
 export async function ensureSchemaCompatibility(): Promise<void> {
+  await pool.query('CREATE EXTENSION IF NOT EXISTS pgcrypto');
+
   await pool.query(`
     ALTER TABLE remote_agent_codebases
     ADD COLUMN IF NOT EXISTS sandbox_mode VARCHAR(50) DEFAULT 'workspace-write'

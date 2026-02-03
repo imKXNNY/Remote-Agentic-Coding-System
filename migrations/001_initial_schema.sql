@@ -2,6 +2,8 @@
 -- Version: 1.0
 -- Description: 3-table schema with remote_agent_ prefix
 
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- Table 1: Codebases
 CREATE TABLE remote_agent_codebases (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
