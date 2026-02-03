@@ -2,7 +2,41 @@
  * Database operations for conversations
  */
 import { pool } from './connection';
-import { Conversation } from '../types';
+import { Conversation, LinkedIssueRef } from '../types';
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function normalizeLinkedIssue(linkedIssue: Conversation['linked_issue']): LinkedIssueRef | null {
+  if (linkedIssue === null) {
+    return null;
+  }
+
+  const candidate = linkedIssue as Partial<LinkedIssueRef>;
+  if (
+    !isNonEmptyString(candidate.owner) ||
+    !isNonEmptyString(candidate.repo) ||
+    typeof candidate.number !== 'number' ||
+    !Number.isInteger(candidate.number) ||
+    candidate.number <= 0
+  ) {
+    throw new Error('Invalid linked_issue payload: expected owner/repo and positive issue number');
+  }
+
+  const normalized: LinkedIssueRef = {
+    owner: candidate.owner.trim(),
+    repo: candidate.repo.trim(),
+    number: candidate.number,
+    linkedAt: isNonEmptyString(candidate.linkedAt) ? candidate.linkedAt : new Date().toISOString(),
+  };
+
+  if (isNonEmptyString(candidate.title)) {
+    normalized.title = candidate.title;
+  }
+
+  return normalized;
+}
 
 export async function getOrCreateConversation(
   platformType: string,
@@ -40,10 +74,22 @@ export async function getOrCreateConversation(
 
 export async function updateConversation(
   id: string,
-  updates: Partial<Pick<Conversation, 'codebase_id' | 'cwd' | 'ai_assistant_type' | 'model_id' | 'additional_dirs' | 'last_bootstrap_at' | 'bootstrap_status'>>
+  updates: Partial<
+    Pick<
+      Conversation,
+      | 'codebase_id'
+      | 'cwd'
+      | 'ai_assistant_type'
+      | 'model_id'
+      | 'linked_issue'
+      | 'additional_dirs'
+      | 'last_bootstrap_at'
+      | 'bootstrap_status'
+    >
+  >
 ): Promise<void> {
   const fields: string[] = [];
-  const values: (string | null | Date | string[])[] = [];
+  const values: (string | null | Date | string[] | Record<string, unknown>)[] = [];
   let i = 1;
 
   if (updates.codebase_id !== undefined) {
@@ -61,6 +107,10 @@ export async function updateConversation(
   if (updates.model_id !== undefined) {
     fields.push(`model_id = $${String(i++)}`);
     values.push(updates.model_id);
+  }
+  if (updates.linked_issue !== undefined) {
+    fields.push(`linked_issue = $${String(i++)}`);
+    values.push(normalizeLinkedIssue(updates.linked_issue) as unknown as Record<string, unknown> | null);
   }
   if (updates.additional_dirs !== undefined) {
     fields.push(`additional_dirs = $${String(i++)}`);

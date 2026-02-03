@@ -49,6 +49,12 @@ export class API {
     return res.json();
   }
 
+  static async getConversationContext(conversationId: string) {
+    const res = await this.fetch(`/api/conversations/${conversationId}/context`);
+    if (!res.ok) throw new Error('Failed to fetch conversation context');
+    return res.json();
+  }
+
   static async getCommands(conversationId: string) {
     const res = await this.fetch(`/api/conversations/${conversationId}/commands`);
     if (!res.ok) throw new Error('Failed to fetch commands');
@@ -70,6 +76,12 @@ export class API {
   static async getGitHubIssues(owner: string, repo: string) {
     const res = await this.fetch(`/api/github/issues?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`);
     if (!res.ok) throw new Error('Failed to fetch GitHub issues');
+    return res.json();
+  }
+
+  static async getStats() {
+    const res = await this.fetch('/api/stats');
+    if (!res.ok) throw new Error('Failed to fetch stats');
     return res.json();
   }
 }

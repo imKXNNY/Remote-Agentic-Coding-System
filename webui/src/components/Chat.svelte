@@ -10,6 +10,7 @@
   } from '../lib/websocket';
   import CommandPalette from './CommandPalette.svelte';
   import ContextSelector from './ContextSelector.svelte';
+  import StatsPanel from './StatsPanel.svelte';
 
   interface Conversation {
     id: string;
@@ -19,6 +20,9 @@
     cwd?: string;
     codebase_id?: string;
     additional_dirs?: string[];
+    ai_assistant_type?: string;
+    model_id?: string;
+    sandbox_mode?: 'read-only' | 'workspace-write' | 'danger-full-access';
   }
 
   let conversationId = '';
@@ -31,6 +35,25 @@
   let messagesDiv: HTMLDivElement;
   let joined = false;
   let showControls = false;
+  const METADATA_SYNC_DELAY_MS = 1000;
+
+  async function refreshConversations(preferredId?: string) {
+    try {
+      const updated: Conversation[] = await API.getConversations();
+      conversationList = updated;
+
+      if (preferredId && updated.some(c => c.id === preferredId)) {
+        conversationId = preferredId;
+        return;
+      }
+
+      if (!conversationId && updated.length > 0) {
+        conversationId = updated[0].id;
+      }
+    } catch (e) {
+      console.error('Failed to refresh conversations:', e);
+    }
+  }
 
   $: selectedConversation = conversationList.find(c => c.id === conversationId);
   $: selectedCodebaseId = selectedConversation?.codebase_id || null;
@@ -105,9 +128,8 @@
 
   onMount(async () => {
     try {
-      conversationList = await API.getConversations();
-      if (conversationList.length > 0) {
-        conversationId = conversationList[0].id;
+      await refreshConversations();
+      if (conversationId) {
         await loadHistory(conversationId);
       } else {
         // Create new ID if none exist (random or timestamp)
@@ -181,6 +203,12 @@
   function handleControlAction(event: CustomEvent<string>) {
     const content = event.detail;
     sendMessage(conversationId, content);
+    // Refresh once immediately and once delayed so metadata chips stay in sync
+    // after deterministic commands like /setmodel, /setsandbox, /set-codebase.
+    void refreshConversations(conversationId);
+    setTimeout(() => {
+      void refreshConversations(conversationId);
+    }, METADATA_SYNC_DELAY_MS);
   }
 
   afterUpdate(() => {
@@ -208,7 +236,6 @@
             type="text"
             bind:value={searchTerm}
             placeholder="Search sessions..."
-            autoFocus
             on:blur={() => setTimeout(() => (showSearch = false), 200)}
           />
           <div class="search-results">
@@ -253,6 +280,15 @@
       <span class="status-text">{$status}</span>
     </div>
   </div>
+
+  {#if selectedConversation}
+    <div class="context-strip">
+      <span class="context-chip">{selectedConversation.project_name || 'No codebase'}</span>
+      <span class="context-chip">cwd: {selectedConversation.cwd || 'n/a'}</span>
+      <span class="context-chip">assistant: {selectedConversation.ai_assistant_type || 'n/a'}</span>
+      <span class="context-chip">sandbox: {selectedConversation.sandbox_mode || 'n/a'}</span>
+    </div>
+  {/if}
 
   {#if $status !== 'connected'}
     <div class="connection-banner {$status}">
@@ -347,10 +383,16 @@
       <div class="chat-controls glass shadow">
         <ContextSelector
           {selectedCodebaseId}
+          {conversationId}
           additionalDirs={selectedConversation?.additional_dirs || []}
+          cwd={selectedConversation?.cwd || null}
+          assistantType={selectedConversation?.ai_assistant_type || null}
+          modelId={selectedConversation?.model_id || null}
+          sandboxMode={selectedConversation?.sandbox_mode || null}
           on:select={handleControlAction}
         />
         <CommandPalette {conversationId} on:select={handleControlAction} />
+        <StatsPanel />
       </div>
     {/if}
   </div>
@@ -531,6 +573,28 @@
     display: flex;
     overflow: hidden;
     position: relative;
+  }
+
+  .context-strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 8px var(--gap-md);
+    border-bottom: 1px solid var(--border-subtle);
+    background: rgba(0, 0, 0, 0.12);
+  }
+
+  .context-chip {
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    border: 1px solid var(--border-subtle);
+    background: rgba(255, 255, 255, 0.03);
+    border-radius: 999px;
+    padding: 2px 8px;
+    max-width: 100%;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .chat-viewport {

@@ -10,11 +10,20 @@ export interface Conversation {
   cwd: string | null;
   ai_assistant_type: string;
   model_id: string | null;
+  linked_issue: LinkedIssueRef | null;
   additional_dirs: string[] | null;
   last_bootstrap_at: Date | null;
   bootstrap_status: 'pending' | 'running' | 'success' | 'failed' | 'skipped';
   created_at: Date;
   updated_at: Date;
+}
+
+export interface LinkedIssueRef {
+  owner: string;
+  repo: string;
+  number: number;
+  title?: string;
+  linkedAt: string;
 }
 
 export interface Codebase {

@@ -3,7 +3,12 @@
   import { API } from '../lib/api';
 
   export let selectedCodebaseId: string | null = null;
+  export let conversationId = '';
   export let additionalDirs: string[] = [];
+  export let cwd: string | null = null;
+  export let assistantType: string | null = null;
+  export let modelId: string | null = null;
+  export let sandboxMode: 'read-only' | 'workspace-write' | 'danger-full-access' | null = null;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let codebases: any[] = [];
@@ -16,6 +21,20 @@
   let loadingIssues = false;
   let showIssuePicker = false;
   let selectedIssueId = '';
+  let modelDraft = '';
+  let sandboxDraft: 'read-only' | 'workspace-write' | 'danger-full-access' = 'workspace-write';
+  let addDirDraft = '';
+  let lastModelFromServer: string | null = null;
+  let lastSandboxFromServer: 'read-only' | 'workspace-write' | 'danger-full-access' | null = null;
+  const commonModels = ['gpt-5', 'gpt-5-codex', 'gpt-5-mini'];
+  let linkedIssue:
+    | {
+        owner: string;
+        repo: string;
+        number: number;
+        title?: string;
+      }
+    | null = null;
 
   const dispatch = createEventDispatcher<{
     select: string;
@@ -34,11 +53,40 @@
   }
 
   onMount(loadCodebases);
+  $: if (conversationId) {
+    loadLinkedIssue();
+  }
+  $: if (modelId !== lastModelFromServer) {
+    modelDraft = modelId ?? '';
+    lastModelFromServer = modelId ?? null;
+  }
+  $: if (sandboxMode !== lastSandboxFromServer) {
+    sandboxDraft = sandboxMode ?? 'workspace-write';
+    lastSandboxFromServer = sandboxMode ?? null;
+  }
 
   function handleSelect(id: string) {
     if (id !== selectedCodebaseId) {
       dispatch('select', `/set-codebase ${id}`);
     }
+  }
+
+  function applyModel(): void {
+    const value = modelDraft.trim();
+    if (!value) return;
+    dispatch('select', `/setmodel ${value}`);
+  }
+
+  function applySandbox(): void {
+    dispatch('select', `/setsandbox ${sandboxDraft}`);
+  }
+
+  function addDirectory(): void {
+    const value = addDirDraft.trim();
+    if (!value) return;
+    const escapedValue = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    dispatch('select', `/codex-add-dir "${escapedValue}"`);
+    addDirDraft = '';
   }
 
   // --- GitHub Issue Integration ---
@@ -70,16 +118,37 @@
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   function handleIssueSelect(issue: any) {
-    // Construct context message
-    const contextMsg = `/context link-issue ${issue.number}`;
-    // Simplified for now, or use natural language:
-    // "Context: Issue #123 - Title"
-    // Let's stick to natural language injection into chat input
-    const userMsg = `Context: Issue #${issue.number} - ${issue.title}`;
-    dispatch('select', userMsg);
+    const repoInfo = activeCodebase?.repository_url ? getOwnerRepo(activeCodebase.repository_url) : null;
+    if (!repoInfo) return;
+    const escapedTitle = String(issue.title ?? '').replace(/"/g, '\\"');
+    dispatch(
+      'select',
+      `/context link-issue ${repoInfo.owner}/${repoInfo.repo}#${String(issue.number)} "${escapedTitle}"`
+    );
+    linkedIssue = {
+      owner: repoInfo.owner,
+      repo: repoInfo.repo,
+      number: issue.number,
+      title: issue.title,
+    };
 
     showIssuePicker = false;
     selectedIssueId = '';
+  }
+
+  async function loadLinkedIssue(): Promise<void> {
+    if (!conversationId) return;
+    try {
+      const data = await API.getConversationContext(conversationId);
+      linkedIssue = data.linkedIssue ?? null;
+    } catch {
+      linkedIssue = null;
+    }
+  }
+
+  function clearLinkedIssue(): void {
+    dispatch('select', '/context clear');
+    linkedIssue = null;
   }
 </script>
 
@@ -134,6 +203,96 @@
       {/each}
     </select>
   {/if}
+
+  <div class="quick-actions">
+    <button class="action-btn" on:click={() => dispatch('select', '/reset')} title="Reset active session">
+      Reset Session
+    </button>
+    <button
+      class="action-btn"
+      on:click={() => dispatch('select', '/bootstrap')}
+      title="Run project provisioning"
+      disabled={!selectedCodebaseId}
+    >
+      Bootstrap
+    </button>
+  </div>
+
+  <div class="context-meta">
+    <div class="meta-row"><span class="meta-key">CWD</span><span class="meta-value">{cwd || 'n/a'}</span></div>
+    <div class="meta-row"><span class="meta-key">Assistant</span><span class="meta-value">{assistantType || 'n/a'}</span></div>
+    <div class="meta-row"><span class="meta-key">Model</span><span class="meta-value">{modelId || 'default'}</span></div>
+    <div class="meta-row"><span class="meta-key">Sandbox</span><span class="meta-value">{sandboxMode || 'n/a'}</span></div>
+  </div>
+
+  {#if linkedIssue}
+    <div class="linked-issue">
+      <div class="section-header">
+        <span>Linked Issue</span>
+        <button class="clear-btn" on:click={clearLinkedIssue}>Clear</button>
+      </div>
+      <div class="issue-ref">
+        {linkedIssue.owner}/{linkedIssue.repo}#{linkedIssue.number}
+      </div>
+      {#if linkedIssue.title}
+        <div class="issue-title-line">{linkedIssue.title}</div>
+      {/if}
+    </div>
+  {/if}
+
+  <div class="config-panel">
+    <div class="section-header">
+      <span>Runtime Config</span>
+    </div>
+
+    <div class="control-row">
+      <label for="model-select">Model</label>
+      <div class="control-inline">
+        <select id="model-select" bind:value={modelDraft} class="inline-control">
+          <option value="">Custom...</option>
+          {#each commonModels as model}
+            <option value={model}>{model}</option>
+          {/each}
+        </select>
+        <input
+          class="inline-control"
+          type="text"
+          bind:value={modelDraft}
+          placeholder="model id"
+          on:keydown={e => e.key === 'Enter' && applyModel()}
+        />
+        <button class="mini-btn" on:click={applyModel} disabled={!modelDraft.trim()}>Set</button>
+      </div>
+    </div>
+
+    <div class="control-row">
+      <label for="sandbox-select">Sandbox</label>
+      <div class="control-inline">
+        <select id="sandbox-select" bind:value={sandboxDraft} class="inline-control">
+          <option value="read-only">read-only</option>
+          <option value="workspace-write">workspace-write</option>
+          <option value="danger-full-access">danger-full-access</option>
+        </select>
+        <button class="mini-btn" on:click={applySandbox} disabled={!selectedCodebaseId}>Apply</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="config-panel">
+    <div class="section-header">
+      <span>Additional Directory</span>
+    </div>
+    <div class="control-inline">
+      <input
+        class="inline-control"
+        type="text"
+        bind:value={addDirDraft}
+        placeholder="relative path from /workspace"
+        on:keydown={e => e.key === 'Enter' && addDirectory()}
+      />
+      <button class="mini-btn" on:click={addDirectory} disabled={!addDirDraft.trim()}>Add</button>
+    </div>
+  </div>
 
   {#if additionalDirs.length > 0}
     <div class="additional-dirs">
@@ -264,6 +423,154 @@
   .codebase-dropdown option {
     background: #1a1a1a;
     color: var(--text-primary);
+  }
+
+  .quick-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .action-btn {
+    font-size: 0.78rem;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+    cursor: pointer;
+    transition: var(--transition-fast);
+  }
+
+  .action-btn:hover:not(:disabled) {
+    color: var(--text-primary);
+    border-color: var(--accent-blue);
+    background: rgba(14, 99, 156, 0.12);
+  }
+
+  .action-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .context-meta {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px;
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .meta-row {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    font-size: 0.75rem;
+  }
+
+  .meta-key {
+    min-width: 58px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .meta-value {
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .config-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 8px;
+    border-radius: var(--radius-sm);
+    background: rgba(255, 255, 255, 0.02);
+    border: 1px solid var(--border-subtle);
+  }
+
+  .linked-issue {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px;
+    border-radius: var(--radius-sm);
+    background: rgba(43, 85, 29, 0.12);
+    border: 1px solid rgba(43, 85, 29, 0.35);
+  }
+
+  .issue-ref {
+    color: var(--text-primary);
+    font-size: 0.8rem;
+    font-family: var(--font-mono);
+  }
+
+  .issue-title-line {
+    color: var(--text-muted);
+    font-size: 0.75rem;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .control-row {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .control-row label {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+  }
+
+  .control-inline {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .inline-control {
+    flex: 1;
+    min-width: 0;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    color: var(--text-secondary);
+    padding: 6px 8px;
+    font-size: 0.8rem;
+  }
+
+  .inline-control:focus {
+    outline: none;
+    border-color: var(--accent-blue);
+  }
+
+  .mini-btn {
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    padding: 6px 8px;
+    cursor: pointer;
+    transition: var(--transition-fast);
+  }
+
+  .mini-btn:hover:not(:disabled) {
+    color: var(--text-primary);
+    border-color: var(--accent-blue);
+    background: rgba(14, 99, 156, 0.12);
+  }
+
+  .mini-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
   }
 
   /* Additional Dirs */

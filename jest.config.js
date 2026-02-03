@@ -10,6 +10,8 @@ module.exports = {
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
   verbose: true,
+  modulePathIgnorePatterns: ['<rootDir>/workspace/'],
+  testPathIgnorePatterns: ['<rootDir>/workspace/'],
   // Transform ESM modules from @octokit and @anthropic-ai packages
   transformIgnorePatterns: ['node_modules/(?!(@octokit|@anthropic-ai)/)'],
   moduleNameMapper: {

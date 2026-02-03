@@ -50,3 +50,6 @@ Thumbs.db
 .test-repo-url
 .test-issue-number
 
+# Codex Skill Package
+gh-issue-management/
+gh-issue-management.skill

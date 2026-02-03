@@ -168,6 +168,26 @@ export async function handleMessage(
       console.log(`[Orchestrator] Resuming session ${session.id}`);
     }
 
+    const sessionMetadata = session.metadata as {
+      linkedIssue?: {
+        owner: string;
+        repo: string;
+        number: number;
+        title?: string;
+      } | null;
+    };
+    const linkedIssue = conversation.linked_issue ?? sessionMetadata?.linkedIssue ?? null;
+
+    if (!issueContext && linkedIssue) {
+      const linked = linkedIssue;
+      const issueTitle = linked.title ? ` - "${linked.title}"` : '';
+      const linkedIssueContext = `[Linked Issue Context]
+Issue: ${linked.owner}/${linked.repo}#${String(linked.number)}${issueTitle}
+`;
+      promptToSend = `${promptToSend}\n\n---\n\n${linkedIssueContext}`;
+      console.log('[Orchestrator] Appended linked issue context');
+    }
+
     // Send to AI and stream responses
     const mode = platform.getStreamingMode();
     console.log(`[Orchestrator] Streaming mode: ${mode}`);
