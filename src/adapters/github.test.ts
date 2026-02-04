@@ -557,6 +557,56 @@ describe('GitHubAdapter', () => {
       );
     });
 
+    test('merge-gate fetches additional pages for checks and reviews', async () => {
+      const octokit = (adapter as any).octokit;
+      octokit.rest.checks.listForRef
+        .mockResolvedValueOnce({
+          data: {
+            check_runs: Array.from({ length: 100 }, (_, i) => ({
+              name: `check-${String(i)}`,
+              status: 'completed',
+              conclusion: 'success',
+            })),
+          },
+        })
+        .mockResolvedValueOnce({
+          data: {
+            check_runs: [{ name: 'check-100', status: 'completed', conclusion: 'success' }],
+          },
+        });
+      octokit.rest.pulls.listReviews
+        .mockResolvedValueOnce({
+          data: Array.from({ length: 100 }, (_, i) => ({
+            user: { login: `reviewer-${String(i)}` },
+            state: 'APPROVED',
+          })),
+        })
+        .mockResolvedValueOnce({
+          data: [{ user: { login: 'reviewer-100' }, state: 'APPROVED' }],
+        });
+
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: { body: '@remote-agent merge-gate 31', user: { login: 'u' } },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'maintainer' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.httpStatus).toBe(200);
+      expect(octokit.rest.checks.listForRef).toHaveBeenCalledTimes(2);
+      expect(octokit.rest.pulls.listReviews).toHaveBeenCalledTimes(2);
+    });
+
     test('pause-loop command succeeds for maintainer', async () => {
       webhookDb.pauseWebhookChain.mockResolvedValueOnce({ id: 'chain-1' });
       const payload = JSON.stringify({

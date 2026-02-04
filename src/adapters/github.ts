@@ -411,25 +411,57 @@ export class GitHubAdapter implements IPlatformAdapter {
     });
     const pull = pullResponse.data;
 
-    const [combinedStatusResponse, checkRunsResponse, reviewsResponse] = await Promise.all([
-      this.octokit.rest.repos.getCombinedStatusForRef({
-        owner,
-        repo,
-        ref: pull.head.sha,
-      }),
-      this.octokit.rest.checks.listForRef({
+    const combinedStatusResponse = await this.octokit.rest.repos.getCombinedStatusForRef({
+      owner,
+      repo,
+      ref: pull.head.sha,
+    });
+
+    const checkRuns: { name: string; status: string | null; conclusion: string | null }[] = [];
+    let checkRunsPage = 1;
+    while (true) {
+      const response = await this.octokit.rest.checks.listForRef({
         owner,
         repo,
         ref: pull.head.sha,
         per_page: 100,
-      }),
-      this.octokit.rest.pulls.listReviews({
+        page: checkRunsPage,
+      });
+      checkRuns.push(
+        ...response.data.check_runs.map(checkRun => ({
+          name: checkRun.name,
+          status: checkRun.status,
+          conclusion: checkRun.conclusion ?? null,
+        }))
+      );
+      if (response.data.check_runs.length < 100) {
+        break;
+      }
+      checkRunsPage += 1;
+    }
+
+    const reviews: { author: string; state: string }[] = [];
+    let reviewsPage = 1;
+    while (true) {
+      const response = await this.octokit.rest.pulls.listReviews({
         owner,
         repo,
         pull_number: pullNumber,
         per_page: 100,
-      }),
-    ]);
+        page: reviewsPage,
+      });
+      const pageReviews = response.data
+        .filter(review => Boolean(review.user?.login))
+        .map(review => ({
+          author: review.user?.login ?? '',
+          state: review.state ?? 'COMMENTED',
+        }));
+      reviews.push(...pageReviews);
+      if (response.data.length < 100) {
+        break;
+      }
+      reviewsPage += 1;
+    }
 
     const observedChecks = [
       ...combinedStatusResponse.data.statuses.map(status => ({
@@ -437,19 +469,12 @@ export class GitHubAdapter implements IPlatformAdapter {
         status: normalizeCombinedStatusState(status.state),
         source: 'status' as const,
       })),
-      ...checkRunsResponse.data.check_runs.map(checkRun => ({
+      ...checkRuns.map(checkRun => ({
         name: checkRun.name,
         status: normalizeCheckRunConclusion(checkRun.status, checkRun.conclusion),
         source: 'check_run' as const,
       })),
     ];
-
-    const reviewStates = reviewsResponse.data
-      .filter(review => Boolean(review.user?.login))
-      .map(review => ({
-        author: review.user?.login ?? '',
-        state: review.state ?? 'COMMENTED',
-      }));
 
     const evaluation = evaluateMergeGate({
       pullRequestState: pull.state,
@@ -457,7 +482,7 @@ export class GitHubAdapter implements IPlatformAdapter {
       mergeableState: pull.mergeable_state ?? null,
       requiredChecks,
       observedChecks,
-      reviews: reviewStates,
+      reviews,
     });
 
     return {

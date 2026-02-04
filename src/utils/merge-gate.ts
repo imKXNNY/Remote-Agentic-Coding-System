@@ -208,7 +208,12 @@ export function normalizeCheckRunConclusion(
   const normalizedStatus = (status ?? '').toLowerCase();
   const normalizedConclusion = (conclusion ?? '').toLowerCase();
 
-  if (normalizedStatus === 'queued' || normalizedStatus === 'in_progress' || normalizedStatus === 'waiting') {
+  if (
+    normalizedStatus === 'queued' ||
+    normalizedStatus === 'in_progress' ||
+    normalizedStatus === 'waiting' ||
+    normalizedStatus === 'pending'
+  ) {
     return 'pending';
   }
 
