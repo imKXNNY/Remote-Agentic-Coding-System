@@ -8,8 +8,41 @@ jest.mock('@octokit/rest', () => ({
       issues: { createComment: jest.fn() },
       repos: {
         get: jest.fn().mockResolvedValue({ data: { default_branch: 'main' } }),
+        getCombinedStatusForRef: jest.fn().mockResolvedValue({
+          data: {
+            statuses: [
+              { context: 'ci / test', state: 'success' },
+              { context: 'lint', state: 'success' },
+            ],
+          },
+        }),
         getCollaboratorPermissionLevel: jest.fn().mockResolvedValue({ data: { permission: 'write' } }),
-      }
+      },
+      checks: {
+        listForRef: jest.fn().mockResolvedValue({
+          data: {
+            check_runs: [
+              { name: 'ci / test', status: 'completed', conclusion: 'success' },
+              { name: 'lint', status: 'completed', conclusion: 'success' },
+            ],
+          },
+        }),
+      },
+      pulls: {
+        get: jest.fn().mockResolvedValue({
+          data: {
+            number: 31,
+            state: 'open',
+            head: { sha: 'sha-1' },
+            mergeable: true,
+            mergeable_state: 'clean',
+          },
+        }),
+        listReviews: jest.fn().mockResolvedValue({ data: [] }),
+        merge: jest.fn().mockResolvedValue({
+          data: { merged: true, message: 'Pull Request successfully merged', sha: 'sha-merged' },
+        }),
+      },
     }
   }))
 }));
@@ -49,6 +82,7 @@ jest.mock('../db/webhook-control-plane', () => ({
   overrideWebhookChainCooldown: jest.fn(),
   overrideRepositoryCircuitBreaker: jest.fn(),
   approveWebhookRun: jest.fn(),
+  recordRepositoryAutomationOverride: jest.fn(),
 }));
 jest.mock('../orchestrator/orchestrator', () => ({
   handleMessage: jest.fn()
@@ -67,6 +101,7 @@ describe('GitHubAdapter', () => {
     overrideWebhookChainCooldown: jest.Mock;
     overrideRepositoryCircuitBreaker: jest.Mock;
     approveWebhookRun: jest.Mock;
+    recordRepositoryAutomationOverride: jest.Mock;
   };
 
   beforeEach(() => {
@@ -405,6 +440,245 @@ describe('GitHubAdapter', () => {
           runId: 'run-2',
         })
       );
+    });
+
+    test('merge-gate command returns deterministic allow decision', async () => {
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: { body: '@remote-agent merge-gate 31 --dry-run', user: { login: 'u' } },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'maintainer' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.httpStatus).toBe(200);
+      expect(result.body).toEqual(
+        expect.objectContaining({
+          status: 'merge_gate_passed',
+          action: 'merge_gate',
+          decision: 'allow',
+          dryRun: true,
+        })
+      );
+    });
+
+    test('auto-merge command blocks on pending checks', async () => {
+      const octokit = (adapter as any).octokit;
+      octokit.rest.repos.getCombinedStatusForRef.mockResolvedValueOnce({
+        data: {
+          statuses: [{ context: 'ci / test', state: 'pending' }],
+        },
+      });
+
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: { body: '@remote-agent auto-merge 31', user: { login: 'u' } },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'maintainer' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.httpStatus).toBe(200);
+      expect(result.body).toEqual(
+        expect.objectContaining({
+          status: 'merge_gate_denied',
+          action: 'auto_merge',
+          decision: 'deny',
+        })
+      );
+      expect(result.body).toEqual(expect.objectContaining({ denyReasons: expect.arrayContaining(['checks_pending']) }));
+      expect(octokit.rest.pulls.merge).not.toHaveBeenCalled();
+    });
+
+    test('auto-merge command allows audited override', async () => {
+      const octokit = (adapter as any).octokit;
+      octokit.rest.repos.getCombinedStatusForRef.mockResolvedValueOnce({
+        data: {
+          statuses: [{ context: 'ci / test', state: 'failure' }],
+        },
+      });
+
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: { body: '@remote-agent auto-merge 31 --override maintainer-reviewed-risk', user: { login: 'u' } },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'maintainer' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.httpStatus).toBe(200);
+      expect(result.body).toEqual(
+        expect.objectContaining({
+          status: 'auto_merged',
+          action: 'auto_merge',
+          overrideApplied: true,
+        })
+      );
+      expect(webhookDb.recordRepositoryAutomationOverride).toHaveBeenCalledWith(
+        expect.objectContaining({
+          repositoryFullName: 'imKXNNY/Remote-Agentic-Coding-System',
+          action: 'override_merge_gate',
+          actor: 'maintainer',
+        })
+      );
+      expect(octokit.rest.pulls.merge).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'imKXNNY',
+          repo: 'Remote-Agentic-Coding-System',
+          pull_number: 31,
+          sha: 'sha-1',
+        })
+      );
+    });
+
+    test('auto-merge parser avoids dry-run false positives in override reason', async () => {
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: {
+          body: '@remote-agent auto-merge 31 --override manual-note-with---dry-run-text',
+          user: { login: 'u' },
+        },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'maintainer' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.httpStatus).toBe(200);
+      expect(result.body).toEqual(
+        expect.objectContaining({
+          status: 'auto_merged',
+          action: 'auto_merge',
+          overrideApplied: false,
+        })
+      );
+      expect(webhookDb.recordRepositoryAutomationOverride).not.toHaveBeenCalled();
+    });
+
+    test('auto-merge dry-run with override does not write audit entries', async () => {
+      const octokit = (adapter as any).octokit;
+      octokit.rest.repos.getCombinedStatusForRef.mockResolvedValueOnce({
+        data: {
+          statuses: [{ context: 'ci / test', state: 'failure' }],
+        },
+      });
+
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: {
+          body: '@remote-agent auto-merge 31 --dry-run --override maintainer-reviewed-risk',
+          user: { login: 'u' },
+        },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'maintainer' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.httpStatus).toBe(200);
+      expect(result.body).toEqual(
+        expect.objectContaining({
+          status: 'auto_merge_dry_run',
+          action: 'auto_merge',
+          dryRun: true,
+          overrideApplied: true,
+        })
+      );
+      expect(webhookDb.recordRepositoryAutomationOverride).not.toHaveBeenCalled();
+      expect(octokit.rest.pulls.merge).not.toHaveBeenCalled();
+    });
+
+    test('merge-gate fetches additional pages for checks and reviews', async () => {
+      const octokit = (adapter as any).octokit;
+      octokit.rest.checks.listForRef
+        .mockResolvedValueOnce({
+          data: {
+            check_runs: Array.from({ length: 100 }, (_, i) => ({
+              name: `check-${String(i)}`,
+              status: 'completed',
+              conclusion: 'success',
+            })),
+          },
+        })
+        .mockResolvedValueOnce({
+          data: {
+            check_runs: [{ name: 'check-100', status: 'completed', conclusion: 'success' }],
+          },
+        });
+      octokit.rest.pulls.listReviews
+        .mockResolvedValueOnce({
+          data: Array.from({ length: 100 }, (_, i) => ({
+            user: { login: `reviewer-${String(i)}` },
+            state: 'APPROVED',
+          })),
+        })
+        .mockResolvedValueOnce({
+          data: [{ user: { login: 'reviewer-100' }, state: 'APPROVED' }],
+        });
+
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: { body: '@remote-agent merge-gate 31', user: { login: 'u' } },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'maintainer' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.httpStatus).toBe(200);
+      expect(octokit.rest.checks.listForRef).toHaveBeenCalledTimes(2);
+      expect(octokit.rest.pulls.listReviews).toHaveBeenCalledTimes(2);
     });
 
     test('pause-loop command succeeds for maintainer', async () => {

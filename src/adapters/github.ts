@@ -22,6 +22,12 @@ import {
   WEBHOOK_RUN_REASONS,
 } from '../utils/webhook-control-plane';
 import { evaluateWebhookPolicy, WebhookRiskTier } from '../utils/webhook-policy';
+import {
+  evaluateMergeGate,
+  normalizeCheckRunConclusion,
+  normalizeCombinedStatusState,
+  parseRequiredMergeChecks,
+} from '../utils/merge-gate';
 
 const execAsync = promisify(exec);
 
@@ -115,6 +121,15 @@ interface WebhookIntakeResult {
 interface ChainControlCommand {
   chainId: string;
   reason: string;
+}
+
+interface MergeGateCommand {
+  pullNumber: number;
+  dryRun: boolean;
+}
+
+interface AutoMergeCommand extends MergeGateCommand {
+  overrideReason?: string;
 }
 
 export class GitHubAdapter implements IPlatformAdapter {
@@ -327,6 +342,159 @@ export class GitHubAdapter implements IPlatformAdapter {
       return null;
     }
     return match[1].trim();
+  }
+
+  private extractMergeGateCommand(comment: string): MergeGateCommand | null {
+    const tokens = comment.trim().split(/\s+/).filter(Boolean);
+    if (tokens[0]?.toLowerCase() !== 'merge-gate') {
+      return null;
+    }
+
+    const pullNumber = Number.parseInt(tokens[1] ?? '', 10);
+    if (!Number.isFinite(pullNumber) || pullNumber <= 0) {
+      return null;
+    }
+
+    const dryRun = tokens.slice(2).some(token => token.toLowerCase() === '--dry-run');
+    return { pullNumber, dryRun };
+  }
+
+  private extractAutoMergeCommand(comment: string): AutoMergeCommand | null {
+    const trimmed = comment.trim();
+    const tokens = trimmed.split(/\s+/).filter(Boolean);
+    if (tokens[0]?.toLowerCase() !== 'auto-merge') {
+      return null;
+    }
+
+    const pullNumber = Number.parseInt(tokens[1] ?? '', 10);
+    if (!Number.isFinite(pullNumber) || pullNumber <= 0) {
+      return null;
+    }
+
+    const loweredTokens = tokens.map(token => token.toLowerCase());
+    const dryRun = loweredTokens.includes('--dry-run');
+    const overrideIndex = loweredTokens.indexOf('--override');
+    const overrideReason =
+      overrideIndex >= 0 ? tokens.slice(overrideIndex + 1).join(' ').trim() || undefined : undefined;
+
+    return {
+      pullNumber,
+      dryRun,
+      overrideReason,
+    };
+  }
+
+  private resolveMergeMethod(): 'merge' | 'squash' | 'rebase' {
+    const rawValue = (process.env.WEBHOOK_MERGE_METHOD ?? 'squash').toLowerCase();
+    if (rawValue === 'merge' || rawValue === 'squash' || rawValue === 'rebase') {
+      return rawValue;
+    }
+    return 'squash';
+  }
+
+  private async evaluatePullRequestMergeGate(owner: string, repo: string, pullNumber: number): Promise<{
+    decision: 'allow' | 'deny';
+    denyReasons: string[];
+    missingRequiredChecks: string[];
+    pendingChecks: string[];
+    failedChecks: string[];
+    blockingReviewers: string[];
+    pullRequestState: string;
+    mergeableState: string | null;
+    mergeable: boolean | null;
+    requiredChecks: string[];
+    headSha: string;
+  }> {
+    const requiredChecks = parseRequiredMergeChecks(process.env.WEBHOOK_MERGE_GATE_REQUIRED_CHECKS);
+    const pullResponse = await this.octokit.rest.pulls.get({
+      owner,
+      repo,
+      pull_number: pullNumber,
+    });
+    const pull = pullResponse.data;
+
+    const combinedStatusResponse = await this.octokit.rest.repos.getCombinedStatusForRef({
+      owner,
+      repo,
+      ref: pull.head.sha,
+    });
+
+    const checkRuns: { name: string; status: string | null; conclusion: string | null }[] = [];
+    let checkRunsPage = 1;
+    while (true) {
+      const response = await this.octokit.rest.checks.listForRef({
+        owner,
+        repo,
+        ref: pull.head.sha,
+        per_page: 100,
+        page: checkRunsPage,
+      });
+      checkRuns.push(
+        ...response.data.check_runs.map(checkRun => ({
+          name: checkRun.name,
+          status: checkRun.status,
+          conclusion: checkRun.conclusion ?? null,
+        }))
+      );
+      if (response.data.check_runs.length < 100) {
+        break;
+      }
+      checkRunsPage += 1;
+    }
+
+    const reviews: { author: string; state: string }[] = [];
+    let reviewsPage = 1;
+    while (true) {
+      const response = await this.octokit.rest.pulls.listReviews({
+        owner,
+        repo,
+        pull_number: pullNumber,
+        per_page: 100,
+        page: reviewsPage,
+      });
+      const pageReviews = response.data
+        .filter(review => Boolean(review.user?.login))
+        .map(review => ({
+          author: review.user?.login ?? '',
+          state: review.state ?? 'COMMENTED',
+        }));
+      reviews.push(...pageReviews);
+      if (response.data.length < 100) {
+        break;
+      }
+      reviewsPage += 1;
+    }
+
+    const observedChecks = [
+      ...combinedStatusResponse.data.statuses.map(status => ({
+        name: status.context,
+        status: normalizeCombinedStatusState(status.state),
+        source: 'status' as const,
+      })),
+      ...checkRuns.map(checkRun => ({
+        name: checkRun.name,
+        status: normalizeCheckRunConclusion(checkRun.status, checkRun.conclusion),
+        source: 'check_run' as const,
+      })),
+    ];
+
+    const evaluation = evaluateMergeGate({
+      pullRequestState: pull.state,
+      mergeable: pull.mergeable,
+      mergeableState: pull.mergeable_state ?? null,
+      requiredChecks,
+      observedChecks,
+      reviews,
+    });
+
+    return {
+      ...evaluation,
+      pullRequestState: pull.state,
+      mergeableState: pull.mergeable_state ?? null,
+      mergeable: pull.mergeable,
+      requiredChecks,
+      headSha: pull.head.sha,
+    };
   }
 
   private async isMaintainer(owner: string, repo: string, username: string): Promise<boolean> {
@@ -648,11 +816,15 @@ ${triage.technical_summary}
     const resumeLoopCommand = this.extractResumeLoopCommand(strippedComment);
     const overrideCooldownCommand = this.extractOverrideCooldownCommand(strippedComment);
     const overrideCircuitBreakerReason = this.extractOverrideCircuitBreakerReason(strippedComment);
+    const mergeGateCommand = this.extractMergeGateCommand(strippedComment);
+    const autoMergeCommand = this.extractAutoMergeCommand(strippedComment);
     if (
       pauseLoopCommand ||
       resumeLoopCommand ||
       overrideCooldownCommand ||
-      overrideCircuitBreakerReason
+      overrideCircuitBreakerReason ||
+      mergeGateCommand ||
+      autoMergeCommand
     ) {
       const actor = event.sender?.login;
       if (!actor) {
@@ -667,6 +839,111 @@ ${triage.technical_summary}
         return {
           httpStatus: 403,
           body: { status: 'control_denied', reason: 'maintainer_required' },
+          shouldProcess: false,
+        };
+      }
+
+      if (mergeGateCommand) {
+        const gate = await this.evaluatePullRequestMergeGate(owner, repo, mergeGateCommand.pullNumber);
+        return {
+          httpStatus: 200,
+          body: {
+            status: gate.decision === 'allow' ? 'merge_gate_passed' : 'merge_gate_denied',
+            action: 'merge_gate',
+            pullNumber: mergeGateCommand.pullNumber,
+            dryRun: mergeGateCommand.dryRun,
+            decision: gate.decision,
+            denyReasons: gate.denyReasons,
+            missingRequiredChecks: gate.missingRequiredChecks,
+            pendingChecks: gate.pendingChecks,
+            failedChecks: gate.failedChecks,
+            blockingReviewers: gate.blockingReviewers,
+            mergeable: gate.mergeable,
+            mergeableState: gate.mergeableState,
+            requiredChecks: gate.requiredChecks,
+          },
+          shouldProcess: false,
+        };
+      }
+
+      if (autoMergeCommand) {
+        const gate = await this.evaluatePullRequestMergeGate(owner, repo, autoMergeCommand.pullNumber);
+        const overrideApplied = gate.decision === 'deny' && Boolean(autoMergeCommand.overrideReason);
+        const canMerge = gate.decision === 'allow' || overrideApplied;
+
+        if (!canMerge) {
+          return {
+            httpStatus: 200,
+            body: {
+              status: 'merge_gate_denied',
+              action: 'auto_merge',
+              pullNumber: autoMergeCommand.pullNumber,
+              dryRun: autoMergeCommand.dryRun,
+              decision: gate.decision,
+              denyReasons: gate.denyReasons,
+              missingRequiredChecks: gate.missingRequiredChecks,
+              pendingChecks: gate.pendingChecks,
+              failedChecks: gate.failedChecks,
+              blockingReviewers: gate.blockingReviewers,
+              mergeable: gate.mergeable,
+              mergeableState: gate.mergeableState,
+              requiredChecks: gate.requiredChecks,
+            },
+            shouldProcess: false,
+          };
+        }
+
+        if (overrideApplied && !autoMergeCommand.dryRun) {
+          await webhookDb.recordRepositoryAutomationOverride({
+            repositoryFullName: event.repository.full_name,
+            action: 'override_merge_gate',
+            actor,
+            reason: autoMergeCommand.overrideReason ?? 'manual_override',
+            metadata: {
+              pullNumber: autoMergeCommand.pullNumber,
+              denyReasons: gate.denyReasons,
+            },
+          });
+        }
+
+        if (autoMergeCommand.dryRun) {
+          return {
+            httpStatus: 200,
+            body: {
+              status: 'auto_merge_dry_run',
+              action: 'auto_merge',
+              pullNumber: autoMergeCommand.pullNumber,
+              dryRun: true,
+              decision: gate.decision,
+              overrideApplied,
+              denyReasons: gate.denyReasons,
+            },
+            shouldProcess: false,
+          };
+        }
+
+        const mergeMethod = this.resolveMergeMethod();
+        const mergeResponse = await this.octokit.rest.pulls.merge({
+          owner,
+          repo,
+          pull_number: autoMergeCommand.pullNumber,
+          merge_method: mergeMethod,
+          sha: gate.headSha,
+        });
+        return {
+          httpStatus: mergeResponse.data.merged ? 200 : 409,
+          body: {
+            status: mergeResponse.data.merged ? 'auto_merged' : 'auto_merge_failed',
+            action: 'auto_merge',
+            pullNumber: autoMergeCommand.pullNumber,
+            mergeMethod,
+            merged: mergeResponse.data.merged,
+            message: mergeResponse.data.message,
+            sha: mergeResponse.data.sha ?? null,
+            decision: gate.decision,
+            overrideApplied,
+            denyReasons: gate.denyReasons,
+          },
           shouldProcess: false,
         };
       }
