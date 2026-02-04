@@ -271,15 +271,16 @@ export async function postOpenClawBridgeHandler(req: Request, res: Response): Pr
     );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const publicError = 'execution_failed';
     await registerWebhookFailure(chainId, runId, message);
-    await finalizeWebhookRun(runId, 'paused', `openclaw_bridge_error:${message}`);
+    await finalizeWebhookRun(runId, 'paused', 'openclaw_bridge_error');
 
     res.status(500).json({
       status: 'execution_failed',
       eventId: payload.eventId,
       runId,
       chainId,
-      error: message,
+      error: publicError,
     });
     return;
   }

@@ -188,7 +188,13 @@ describe('openclaw bridge route', () => {
     expect(finalizeWebhookRun).toHaveBeenCalledWith(
       'run-4',
       'paused',
-      expect.stringContaining('openclaw_bridge_error')
+      'openclaw_bridge_error'
+    );
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'execution_failed',
+        error: 'execution_failed',
+      })
     );
   });
 });
