@@ -47,6 +47,33 @@ export interface WebhookRun {
   created_at: Date;
 }
 
+export interface WebhookRunEvent {
+  id: string;
+  run_id: string;
+  chain_id: string;
+  event_type: string;
+  status: string | null;
+  message: string | null;
+  metadata: Record<string, unknown>;
+  created_at: Date;
+}
+
+export interface WebhookMetrics {
+  statusCounts: Record<string, number>;
+  totals: {
+    totalRuns: number;
+    dedupedRuns: number;
+    pausedRuns: number;
+    approvalRequiredRuns: number;
+    blockedRuns: number;
+    executedRuns: number;
+  };
+  durationSeconds: {
+    avg: number;
+    p95: number;
+  };
+}
+
 interface IntakeWebhookRunInput {
   platformType: 'github';
   conversationId: string;
@@ -330,6 +357,18 @@ export async function finalizeWebhookRun(
       [run.chain_id]
     );
   }
+
+  await safeEmitRunEvent(pool, {
+    runId: run.id,
+    chainId: run.chain_id,
+    eventType: 'run_finalized',
+    status,
+    message: reason ?? null,
+    metadata: {
+      policyDecision: run.policy_decision,
+      riskTier: run.risk_tier,
+    },
+  });
 }
 
 export async function registerWebhookFailure(
@@ -373,6 +412,17 @@ export async function registerWebhookFailure(
       [runId, signature]
     );
 
+    await safeEmitRunEvent(client, {
+      runId,
+      chainId,
+      eventType: 'failure_registered',
+      status: null,
+      message: 'Failure signature recorded',
+      metadata: {
+        failureSignature: signature,
+      },
+    });
+
     await client.query('COMMIT');
 
     const repeatCount = chainUpdate.rows[0]?.repeated_failure_count;
@@ -400,6 +450,60 @@ export async function listRecentWebhookRuns(limit = 50): Promise<WebhookRun[]> {
   return result.rows;
 }
 
+export async function listWebhookRunEvents(runId: string, limit = 200): Promise<WebhookRunEvent[]> {
+  const safeLimit = Math.min(Math.max(limit, 1), 500);
+  const result = await pool.query<WebhookRunEvent>(
+    `SELECT *
+     FROM remote_agent_automation_run_events
+     WHERE run_id = $1
+     ORDER BY created_at ASC
+     LIMIT $2`,
+    [runId, safeLimit]
+  );
+  return result.rows;
+}
+
+export async function getWebhookMetrics(): Promise<WebhookMetrics> {
+  const statusCountsResult = await pool.query<{ status: string; count: string }>(
+    `SELECT status, COUNT(*)::text AS count
+     FROM remote_agent_automation_runs
+     GROUP BY status`
+  );
+
+  const durationResult = await pool.query<{ avg_seconds: string | null; p95_seconds: string | null }>(
+    `SELECT
+       AVG(EXTRACT(EPOCH FROM (finished_at - started_at)))::text AS avg_seconds,
+       PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at)))::text AS p95_seconds
+     FROM remote_agent_automation_runs
+     WHERE started_at IS NOT NULL
+       AND finished_at IS NOT NULL`
+  );
+
+  const statusCounts = statusCountsResult.rows.reduce<Record<string, number>>((acc, row) => {
+    acc[row.status] = Number.parseInt(row.count, 10);
+    return acc;
+  }, {});
+
+  const parseMetric = (value: string | null | undefined): number =>
+    value ? Number.parseFloat(value) : 0;
+
+  return {
+    statusCounts,
+    totals: {
+      totalRuns: Object.values(statusCounts).reduce((sum, count) => sum + count, 0),
+      dedupedRuns: statusCounts.deduped ?? 0,
+      pausedRuns: statusCounts.paused ?? 0,
+      approvalRequiredRuns: statusCounts.requires_approval ?? 0,
+      blockedRuns: statusCounts.blocked_policy ?? 0,
+      executedRuns: statusCounts.executed ?? 0,
+    },
+    durationSeconds: {
+      avg: parseMetric(durationResult.rows[0]?.avg_seconds),
+      p95: parseMetric(durationResult.rows[0]?.p95_seconds),
+    },
+  };
+}
+
 export async function approveWebhookRun(runId: string, approvedBy: string): Promise<WebhookRun | null> {
   const result = await pool.query<WebhookRun>(
     `UPDATE remote_agent_automation_runs
@@ -412,7 +516,64 @@ export async function approveWebhookRun(runId: string, approvedBy: string): Prom
      RETURNING *`,
     [runId, approvedBy]
   );
-  return result.rows[0] ?? null;
+  const approvedRun = result.rows[0] ?? null;
+  if (approvedRun) {
+    await safeEmitRunEvent(pool, {
+      runId: approvedRun.id,
+      chainId: approvedRun.chain_id,
+      eventType: 'run_approved',
+      status: approvedRun.status,
+      message: 'Run approved by maintainer',
+      metadata: {
+        approvedBy,
+        policyDecision: approvedRun.policy_decision,
+        riskTier: approvedRun.risk_tier,
+      },
+    });
+  }
+  return approvedRun;
+}
+
+interface Queryable {
+  query: typeof pool.query;
+}
+
+interface EmitRunEventInput {
+  runId: string;
+  chainId: string;
+  eventType: string;
+  status?: string | null;
+  message?: string | null;
+  metadata?: Record<string, unknown>;
+}
+
+async function emitRunEvent(client: Queryable, input: EmitRunEventInput): Promise<void> {
+  await client.query(
+    `INSERT INTO remote_agent_automation_run_events
+      (run_id, chain_id, event_type, status, message, metadata)
+     VALUES
+      ($1, $2, $3, $4, $5, $6::jsonb)`,
+    [
+      input.runId,
+      input.chainId,
+      input.eventType,
+      input.status ?? null,
+      input.message ?? null,
+      JSON.stringify(input.metadata ?? {}),
+    ]
+  );
+}
+
+async function safeEmitRunEvent(client: Queryable, input: EmitRunEventInput): Promise<void> {
+  try {
+    await emitRunEvent(client, input);
+  } catch (error) {
+    console.warn('[WebhookControlPlane] Failed to emit run event', {
+      runId: input.runId,
+      eventType: input.eventType,
+      message: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 interface InsertRunInput {
@@ -446,7 +607,7 @@ async function findExistingDedupeRun(
   return existing.rows[0] ?? null;
 }
 
-async function insertRun(client: { query: typeof pool.query }, input: InsertRunInput): Promise<WebhookRun | null> {
+async function insertRun(client: Queryable, input: InsertRunInput): Promise<WebhookRun | null> {
   const result = await client.query<WebhookRun>(
     `INSERT INTO remote_agent_automation_runs
       (chain_id, delivery_id, dedupe_key, event_type, action, head_sha, status, reason, is_mutating, risk_tier, policy_decision, policy_reason, started_at, expires_at)
@@ -470,7 +631,23 @@ async function insertRun(client: { query: typeof pool.query }, input: InsertRunI
     ]
   );
 
-  return result.rows[0] ?? null;
+  const createdRun = result.rows[0] ?? null;
+  if (createdRun) {
+    await safeEmitRunEvent(client, {
+      runId: createdRun.id,
+      chainId: createdRun.chain_id,
+      eventType: 'run_created',
+      status: createdRun.status,
+      message: 'Run created',
+      metadata: {
+        policyDecision: createdRun.policy_decision,
+        policyReason: createdRun.policy_reason,
+        riskTier: createdRun.risk_tier,
+        isMutating: createdRun.is_mutating,
+      },
+    });
+  }
+  return createdRun;
 }
 
 async function upsertChain(
