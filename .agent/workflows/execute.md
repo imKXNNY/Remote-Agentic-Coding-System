@@ -42,6 +42,11 @@ Maintain a small checklist in the response:
 - [ ] Slice 2 …
 (Use Issue comments if available.)
 
+Add a short checkpoint after each slice using this format:
+- `Done:` what changed in this slice
+- `Evidence:` tests/checks or concrete signal for this slice
+- `Next:` exact next slice action
+
 ## Step 4) Verification (propose commands)
 Propose the repo-appropriate validation commands (prefer existing scripts):
 - lint / format check
