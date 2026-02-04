@@ -46,6 +46,10 @@ export interface WebhookRun {
   finished_at: Date | null;
   expires_at: Date | null;
   created_at: Date;
+  platform_type?: string;
+  repository_full_name?: string;
+  object_type?: string;
+  object_number?: number;
 }
 
 export interface WebhookRunEvent {
@@ -90,6 +94,16 @@ export interface WebhookMetrics {
     avg: number;
     p95: number;
   };
+}
+
+interface ListWebhookRunsInput {
+  limit?: number;
+  platformType?: string;
+  status?: string;
+  chainId?: string;
+  runId?: string;
+  search?: string;
+  windowHours?: number;
 }
 
 interface IntakeWebhookRunInput {
@@ -635,28 +649,70 @@ export async function registerWebhookFailure(
   }
 }
 
-export async function listRecentWebhookRuns(
-  limit = 50,
-  platformType?: string
-): Promise<WebhookRun[]> {
-  const safeLimit = Math.min(Math.max(limit, 1), 200);
-  const result = platformType
-    ? await pool.query<WebhookRun>(
-        `SELECT r.*
-         FROM remote_agent_automation_runs r
-         INNER JOIN remote_agent_automation_chains c ON c.id = r.chain_id
-         WHERE c.platform_type = $1
-         ORDER BY r.created_at DESC
-         LIMIT $2`,
-        [platformType, safeLimit]
-      )
-    : await pool.query<WebhookRun>(
-        `SELECT r.*
-         FROM remote_agent_automation_runs r
-         ORDER BY r.created_at DESC
-         LIMIT $1`,
-        [safeLimit]
-      );
+export async function listRecentWebhookRuns(input: number | ListWebhookRunsInput = 50): Promise<WebhookRun[]> {
+  const options: ListWebhookRunsInput =
+    typeof input === 'number'
+      ? { limit: input }
+      : input;
+
+  const safeLimit = Math.min(Math.max(options.limit ?? 50, 1), 200);
+  const params: string[] = [];
+  const whereParts: string[] = [];
+  const withJoin = Boolean(
+    options.platformType ||
+      options.search ||
+      options.windowHours ||
+      options.status ||
+      options.chainId ||
+      options.runId
+  );
+  const safeWindowHours = Math.min(Math.max(options.windowHours ?? 0, 0), 24 * 7);
+
+  if (options.platformType) {
+    params.push(options.platformType);
+    whereParts.push(`c.platform_type = $${String(params.length)}`);
+  }
+  if (options.status) {
+    params.push(options.status);
+    whereParts.push(`r.status = $${String(params.length)}`);
+  }
+  if (options.chainId) {
+    params.push(options.chainId);
+    whereParts.push(`r.chain_id::text = $${String(params.length)}`);
+  }
+  if (options.runId) {
+    params.push(options.runId);
+    whereParts.push(`r.id::text = $${String(params.length)}`);
+  }
+  if (safeWindowHours > 0) {
+    params.push(String(safeWindowHours));
+    whereParts.push(`r.created_at > NOW() - (($${String(params.length)}::text || ' hours')::interval)`);
+  }
+  if (options.search) {
+    params.push(`%${options.search.toLowerCase()}%`);
+    const p = `$${String(params.length)}`;
+    whereParts.push(
+      `(LOWER(r.id::text) LIKE ${p} OR LOWER(r.chain_id::text) LIKE ${p} OR LOWER(COALESCE(c.repository_full_name, '')) LIKE ${p})`
+    );
+  }
+
+  const whereClause = whereParts.length > 0 ? `WHERE ${whereParts.join(' AND ')}` : '';
+  params.push(String(safeLimit));
+  const limitParam = `$${String(params.length)}`;
+
+  const result = await pool.query<WebhookRun>(
+    `SELECT r.*${
+      withJoin
+        ? ', c.platform_type, c.repository_full_name, c.object_type, c.object_number'
+        : ''
+    }
+     FROM remote_agent_automation_runs r
+     ${withJoin ? 'INNER JOIN remote_agent_automation_chains c ON c.id = r.chain_id' : ''}
+     ${whereClause}
+     ORDER BY r.created_at DESC
+     LIMIT ${limitParam}`,
+    params
+  );
   return result.rows;
 }
 

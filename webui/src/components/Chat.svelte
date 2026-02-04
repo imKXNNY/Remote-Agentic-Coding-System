@@ -11,6 +11,7 @@
   import CommandPalette from './CommandPalette.svelte';
   import ContextSelector from './ContextSelector.svelte';
   import StatsPanel from './StatsPanel.svelte';
+  import AutomationConsole from './AutomationConsole.svelte';
   import { renderAssistantMarkdown } from '../lib/markdown';
 
   interface Conversation {
@@ -409,6 +410,7 @@
         />
         <CommandPalette {conversationId} on:select={handleControlAction} />
         <StatsPanel />
+        <AutomationConsole />
       </div>
     {/if}
   </div>
