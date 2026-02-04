@@ -87,7 +87,10 @@ describe('openclaw bridge route', () => {
 
     expect(intakeWebhookRun).toHaveBeenCalled();
     expect(getWebhookMetrics).toHaveBeenCalledWith('openclaw');
-    expect(listRecentWebhookRuns).toHaveBeenCalledWith(5, 'openclaw');
+    expect(listRecentWebhookRuns).toHaveBeenCalledWith({
+      limit: 5,
+      platformType: 'openclaw',
+    });
     expect(finalizeWebhookRun).toHaveBeenCalledWith('run-1', 'executed', 'openclaw_status_report');
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith(

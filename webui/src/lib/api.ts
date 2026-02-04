@@ -84,4 +84,39 @@ export class API {
     if (!res.ok) throw new Error('Failed to fetch stats');
     return res.json();
   }
+
+  static async getWebhookRuns(filters: {
+    platform?: string;
+    status?: string;
+    windowHours?: number;
+    chainId?: string;
+    runId?: string;
+    search?: string;
+    limit?: number;
+  } = {}) {
+    const params = new URLSearchParams();
+    if (filters.platform) params.set('platform', filters.platform);
+    if (filters.status) params.set('status', filters.status);
+    if (typeof filters.windowHours === 'number') params.set('windowHours', String(filters.windowHours));
+    if (filters.chainId) params.set('chainId', filters.chainId);
+    if (filters.runId) params.set('runId', filters.runId);
+    if (filters.search) params.set('search', filters.search);
+    params.set('limit', String(filters.limit ?? 100));
+
+    const res = await this.fetch(`/api/github/webhook-runs?${params.toString()}`);
+    if (!res.ok) throw new Error('Failed to fetch webhook runs');
+    return res.json();
+  }
+
+  static async getWebhookRunEvents(runId: string, limit = 200) {
+    const res = await this.fetch(`/api/github/webhook-runs/${encodeURIComponent(runId)}/events?limit=${String(limit)}`);
+    if (!res.ok) throw new Error('Failed to fetch webhook run events');
+    return res.json();
+  }
+
+  static async getWebhookMetrics() {
+    const res = await this.fetch('/api/github/webhook-metrics');
+    if (!res.ok) throw new Error('Failed to fetch webhook metrics');
+    return res.json();
+  }
 }

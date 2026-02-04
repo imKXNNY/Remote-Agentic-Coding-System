@@ -147,24 +147,36 @@ describe('github webhook runs route', () => {
     jest.clearAllMocks();
   });
 
-  test('returns latest webhook runs with default limit', async () => {
+  test('returns latest webhook runs with default filter payload', async () => {
     (listRecentWebhookRuns as unknown as jest.Mock).mockResolvedValueOnce([{ id: 'run-1' }]);
     const req = { query: {} } as unknown as Request;
     const res = createResponse();
 
     await getGithubWebhookRunsHandler(req, res);
 
-    expect(listRecentWebhookRuns).toHaveBeenCalledWith(50);
+    expect(listRecentWebhookRuns).toHaveBeenCalledWith({
+      limit: 50,
+      platformType: undefined,
+      status: undefined,
+      chainId: undefined,
+      runId: undefined,
+      search: undefined,
+      windowHours: undefined,
+    });
     expect(res.json).toHaveBeenCalledWith([{ id: 'run-1' }]);
   });
 
-  test('supports explicit numeric limit', async () => {
+  test('supports explicit filters and limit', async () => {
     const req = { query: { limit: '10' } } as unknown as Request;
     const res = createResponse();
 
     await getGithubWebhookRunsHandler(req, res);
 
-    expect(listRecentWebhookRuns).toHaveBeenCalledWith(10);
+    expect(listRecentWebhookRuns).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limit: 10,
+      })
+    );
   });
 
   test('defaults to 50 when limit is not numeric', async () => {
@@ -173,7 +185,11 @@ describe('github webhook runs route', () => {
 
     await getGithubWebhookRunsHandler(req, res);
 
-    expect(listRecentWebhookRuns).toHaveBeenCalledWith(50);
+    expect(listRecentWebhookRuns).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limit: 50,
+      })
+    );
   });
 
   test('clamps limit to upper bound', async () => {
@@ -182,7 +198,37 @@ describe('github webhook runs route', () => {
 
     await getGithubWebhookRunsHandler(req, res);
 
-    expect(listRecentWebhookRuns).toHaveBeenCalledWith(200);
+    expect(listRecentWebhookRuns).toHaveBeenCalledWith(
+      expect.objectContaining({
+        limit: 200,
+      })
+    );
+  });
+
+  test('forwards platform/status/window/search filters', async () => {
+    const req = {
+      query: {
+        platform: 'github',
+        status: 'executed',
+        windowHours: '24',
+        chainId: 'chain-1',
+        runId: 'run-1',
+        search: 'repo-name',
+      },
+    } as unknown as Request;
+    const res = createResponse();
+
+    await getGithubWebhookRunsHandler(req, res);
+
+    expect(listRecentWebhookRuns).toHaveBeenCalledWith({
+      limit: 50,
+      platformType: 'github',
+      status: 'executed',
+      chainId: 'chain-1',
+      runId: 'run-1',
+      search: 'repo-name',
+      windowHours: 24,
+    });
   });
 
   test('propagates query failures for async handler middleware', async () => {
@@ -199,15 +245,39 @@ describe('github webhook run events route', () => {
     jest.clearAllMocks();
   });
 
-  test('returns run event timeline', async () => {
-    (listWebhookRunEvents as unknown as jest.Mock).mockResolvedValueOnce([{ id: 'evt-1', event_type: 'run_created' }]);
+  test('returns run event timeline with redacted secrets', async () => {
+    (listWebhookRunEvents as unknown as jest.Mock).mockResolvedValueOnce([
+      {
+        id: 'evt-1',
+        event_type: 'run_created',
+        message: 'using token ghp_abcdefghijklmnopqrstuvwxyz123',
+        metadata: {
+          nested: {
+            authorization: 'Bearer abcdef1234567890',
+          },
+          safe: 'hello',
+        },
+      },
+    ]);
     const req = { params: { runId: 'run-1' }, query: {} } as unknown as Request;
     const res = createResponse();
 
     await getGithubWebhookRunEventsHandler(req, res);
 
     expect(listWebhookRunEvents).toHaveBeenCalledWith('run-1', 200);
-    expect(res.json).toHaveBeenCalledWith([{ id: 'evt-1', event_type: 'run_created' }]);
+    expect(res.json).toHaveBeenCalledWith([
+      expect.objectContaining({
+        id: 'evt-1',
+        event_type: 'run_created',
+        message: expect.stringContaining('[REDACTED]'),
+        metadata: expect.objectContaining({
+          nested: expect.objectContaining({
+            authorization: '[REDACTED]',
+          }),
+          safe: 'hello',
+        }),
+      }),
+    ]);
   });
 
   test('returns 400 when runId missing', async () => {

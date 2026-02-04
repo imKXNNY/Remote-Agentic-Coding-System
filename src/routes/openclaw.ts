@@ -114,7 +114,7 @@ function buildPolicy(
 async function executeStatusReport(command: string): Promise<OpenClawStatusSummary> {
   const [metrics, recentRuns] = await Promise.all([
     getWebhookMetrics('openclaw'),
-    listRecentWebhookRuns(5, 'openclaw'),
+    listRecentWebhookRuns({ limit: 5, platformType: 'openclaw' }),
   ]);
 
   return {

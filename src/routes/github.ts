@@ -100,7 +100,26 @@ router.get('/github/issues', asyncHandler(getGithubIssuesHandler));
 export async function getGithubWebhookRunsHandler(req: Request, res: Response): Promise<void> {
   const parsedLimit = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 50;
   const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 200) : 50;
-  const rows = await listRecentWebhookRuns(limit);
+  const status = typeof req.query.status === 'string' ? req.query.status : undefined;
+  const platformType = typeof req.query.platform === 'string' ? req.query.platform : undefined;
+  const chainId = typeof req.query.chainId === 'string' ? req.query.chainId : undefined;
+  const runId = typeof req.query.runId === 'string' ? req.query.runId : undefined;
+  const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+  const parsedWindowHours =
+    typeof req.query.windowHours === 'string' ? Number.parseInt(req.query.windowHours, 10) : undefined;
+  const windowHours = Number.isFinite(parsedWindowHours)
+    ? Math.min(Math.max(parsedWindowHours ?? 0, 0), 24 * 7)
+    : undefined;
+
+  const rows = await listRecentWebhookRuns({
+    limit,
+    platformType,
+    status,
+    chainId,
+    runId,
+    search,
+    windowHours,
+  });
   res.json(rows);
 }
 
@@ -119,7 +138,7 @@ export async function getGithubWebhookRunEventsHandler(req: Request, res: Respon
   }
   const parsedLimit = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 200;
   const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 500) : 200;
-  const rows = await listWebhookRunEvents(runId, limit);
+  const rows = await listWebhookRunEvents(runId, limit).then(redactRunEvents);
   res.json(rows);
 }
 
@@ -137,3 +156,42 @@ export async function getGithubWebhookMetricsHandler(_req: Request, res: Respons
 router.get('/github/webhook-metrics', asyncHandler(getGithubWebhookMetricsHandler));
 
 export default router;
+
+const SENSITIVE_KEY_PATTERN = /(token|secret|password|authorization|cookie|api[-_]?key)/i;
+const SENSITIVE_VALUE_PATTERN = /(gh[pous]_[a-z0-9_]+|sk-[a-z0-9_-]{16,}|bearer\s+[a-z0-9._-]+)/i;
+
+function redactStringValue(value: string): string {
+  return SENSITIVE_VALUE_PATTERN.test(value) ? '[REDACTED]' : value;
+}
+
+function redactUnknown(value: unknown): unknown {
+  if (typeof value === 'string') {
+    return redactStringValue(value);
+  }
+  if (Array.isArray(value)) {
+    return value.map(redactUnknown);
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>).map(([key, nested]) => {
+      if (SENSITIVE_KEY_PATTERN.test(key)) {
+        return [key, '[REDACTED]'];
+      }
+      return [key, redactUnknown(nested)];
+    });
+    return Object.fromEntries(entries);
+  }
+  return value;
+}
+
+function redactRunEvents(
+  events: {
+    metadata?: Record<string, unknown>;
+    message?: string | null;
+  }[]
+): Record<string, unknown>[] {
+  return events.map(event => ({
+    ...event,
+    message: typeof event.message === 'string' ? redactStringValue(event.message) : null,
+    metadata: event.metadata ? (redactUnknown(event.metadata) as Record<string, unknown>) : {},
+  }));
+}
