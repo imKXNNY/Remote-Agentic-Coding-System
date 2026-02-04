@@ -50,7 +50,19 @@ interface OpenClawCommandContext {
   args: string[];
 }
 
-class UnsupportedOpenClawCommandError extends Error {}
+class UnsupportedOpenClawCommandError extends Error {
+  constructor(message?: string) {
+    super(message);
+    this.name = 'UnsupportedOpenClawCommandError';
+  }
+}
+
+class OpenClawValidationError extends Error {
+  constructor(message?: string) {
+    super(message);
+    this.name = 'OpenClawValidationError';
+  }
+}
 
 function parseCsv(value: string | undefined, fallback: string[]): string[] {
   if (!value) {
@@ -156,7 +168,7 @@ function getOpenClawCommandRegistry(): Map<string, OpenClawCommandDefinition> {
       execute: async ({ args }): Promise<unknown> => {
         const runId = args[0]?.trim();
         if (!runId) {
-          throw new UnsupportedOpenClawCommandError('Command "/events" requires <runId> argument');
+          throw new OpenClawValidationError('Command "/events" requires <runId> argument');
         }
         const limit = parseOptionalLimit(args[1], 20, 200);
         const events = await listWebhookRunEvents(runId, limit);
@@ -393,12 +405,21 @@ export async function postOpenClawBridgeHandler(req: Request, res: Response): Pr
     return;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    const isValidation = error instanceof OpenClawValidationError;
     const isUnsupported = error instanceof UnsupportedOpenClawCommandError;
-    const publicError = isUnsupported ? 'unsupported_command' : 'execution_failed';
+    const publicError = isValidation
+      ? 'invalid_command_arguments'
+      : isUnsupported
+        ? 'unsupported_command'
+        : 'execution_failed';
     await registerWebhookFailure(chainId, runId, message);
-    await finalizeWebhookRun(runId, 'paused', isUnsupported ? 'command_not_allowed' : 'openclaw_bridge_error');
+    await finalizeWebhookRun(
+      runId,
+      'paused',
+      isValidation || isUnsupported ? 'command_not_allowed' : 'openclaw_bridge_error'
+    );
 
-    res.status(isUnsupported ? 501 : 500).json({
+    res.status(isValidation ? 400 : isUnsupported ? 501 : 500).json({
       status: publicError,
       eventId: payload.eventId,
       runId,

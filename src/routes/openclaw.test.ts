@@ -178,6 +178,45 @@ describe('openclaw bridge route', () => {
 
     expect(listWebhookRunEvents).toHaveBeenCalledWith('run-abc', 30);
     expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        result: [
+          expect.not.objectContaining({
+            metadata: expect.anything(),
+          }),
+        ],
+      })
+    );
+  });
+
+  test('returns 400 when /events is missing required runId argument', async () => {
+    (intakeWebhookRun as unknown as jest.Mock).mockResolvedValueOnce({
+      decision: 'accepted',
+      chain: { id: 'chain-e2' },
+      run: { id: 'run-e2' },
+    });
+
+    const req = {
+      body: {
+        eventId: 'evt-events-missing-runid',
+        conversationId: 'openclaw:events-missing',
+        repositoryFullName: 'imKXNNY/Remote-Agentic-Coding-System',
+        command: '/events',
+      },
+      header: jest.fn().mockReturnValue('secret-123'),
+    } as unknown as Request;
+    const res = createResponse();
+
+    await postOpenClawBridgeHandler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(finalizeWebhookRun).toHaveBeenCalledWith('run-e2', 'paused', 'command_not_allowed');
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'invalid_command_arguments',
+        error: 'invalid_command_arguments',
+      })
+    );
   });
 
   test('blocks disallowed command and returns policy reason', async () => {
