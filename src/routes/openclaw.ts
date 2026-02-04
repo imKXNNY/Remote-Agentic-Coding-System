@@ -68,7 +68,9 @@ function parsePayload(req: Request): OpenClawBridgePayload | null {
   const conversationId = typeof body.conversationId === 'string' ? body.conversationId.trim() : '';
   const repositoryFullName =
     typeof body.repositoryFullName === 'string' ? body.repositoryFullName.trim() : '';
-  const targetBranch = typeof body.targetBranch === 'string' ? body.targetBranch.trim() : undefined;
+  const targetBranchRaw =
+    typeof body.targetBranch === 'string' ? body.targetBranch.trim() : '';
+  const targetBranch = targetBranchRaw || undefined;
   const command = typeof body.command === 'string' ? body.command.trim() : '';
 
   if (!eventId || !conversationId || !repositoryFullName || !command) {
