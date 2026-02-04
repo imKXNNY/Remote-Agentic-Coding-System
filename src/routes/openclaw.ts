@@ -145,10 +145,12 @@ export async function postOpenClawBridgeHandler(req: Request, res: Response): Pr
   }
   const providedBuffer = Buffer.from(providedSecret, 'utf8');
   const configuredBuffer = Buffer.from(configuredSecret, 'utf8');
-  if (
-    providedBuffer.length !== configuredBuffer.length ||
-    !timingSafeEqual(providedBuffer, configuredBuffer)
-  ) {
+  const maxLength = Math.max(providedBuffer.length, configuredBuffer.length);
+  const paddedProvided = Buffer.alloc(maxLength);
+  const paddedConfigured = Buffer.alloc(maxLength);
+  providedBuffer.copy(paddedProvided);
+  configuredBuffer.copy(paddedConfigured);
+  if (!timingSafeEqual(paddedProvided, paddedConfigured)) {
     res.status(401).json({ status: 'invalid_secret' });
     return;
   }
