@@ -2,6 +2,7 @@
  * Database operations for chat messages
  */
 import { pool } from './connection';
+import { isUuid } from '../utils/uuid';
 
 export interface Message {
   id: string;
@@ -26,8 +27,7 @@ export async function saveMessage(
 export async function getMessages(conversationId: string): Promise<Message[]> {
   // Gracefully handle non-UUID strings (like initial WebUI 'default-TIMESTAMP' IDs)
   // to avoid Postgres syntax errors.
-  const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-  if (!uuidRegex.test(conversationId)) {
+  if (!isUuid(conversationId)) {
     return [];
   }
 

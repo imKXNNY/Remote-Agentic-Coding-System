@@ -30,6 +30,7 @@ import githubRouter from './routes/github';
 import openClawRouter from './routes/openclaw';
 import { asyncHandler } from './utils/async-handler';
 import { getGitHubAuthPreflight } from './utils/github-auth';
+import { isUuid } from './utils/uuid';
 
 // Extended WebSocket for heartbeat
 interface ExtWebSocket extends WebSocket {
@@ -348,6 +349,11 @@ async function main(): Promise<void> {
 
   app.get('/api/conversations/:id/context', authMiddleware, asyncHandler(async (req, res) => {
     try {
+      if (!isUuid(req.params.id)) {
+        res.status(404).json({ error: 'Conversation not found' });
+        return;
+      }
+
       const result = await pool.query<{ linked_issue: unknown }>(
         `SELECT linked_issue
          FROM remote_agent_conversations
@@ -381,6 +387,11 @@ async function main(): Promise<void> {
 
   app.get('/api/conversations/:id/commands', authMiddleware, asyncHandler(async (req, res) => {
     try {
+      if (!isUuid(req.params.id)) {
+        res.json({});
+        return;
+      }
+
       const convResult = await pool.query<{ codebase_id: string | null }>(
         'SELECT codebase_id FROM remote_agent_conversations WHERE id = $1',
         [req.params.id]
