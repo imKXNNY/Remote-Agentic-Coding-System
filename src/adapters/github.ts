@@ -403,6 +403,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     mergeableState: string | null;
     mergeable: boolean | null;
     requiredChecks: string[];
+    headSha: string;
   }> {
     const requiredChecks = parseRequiredMergeChecks(process.env.WEBHOOK_MERGE_GATE_REQUIRED_CHECKS);
     const pullResponse = await this.octokit.rest.pulls.get({
@@ -492,6 +493,7 @@ export class GitHubAdapter implements IPlatformAdapter {
       mergeableState: pull.mergeable_state ?? null,
       mergeable: pull.mergeable,
       requiredChecks,
+      headSha: pull.head.sha,
     };
   }
 
@@ -891,7 +893,7 @@ ${triage.technical_summary}
           };
         }
 
-        if (overrideApplied) {
+        if (overrideApplied && !autoMergeCommand.dryRun) {
           await webhookDb.recordRepositoryAutomationOverride({
             repositoryFullName: event.repository.full_name,
             action: 'override_merge_gate',
@@ -926,6 +928,7 @@ ${triage.technical_summary}
           repo,
           pull_number: autoMergeCommand.pullNumber,
           merge_method: mergeMethod,
+          sha: gate.headSha,
         });
         return {
           httpStatus: mergeResponse.data.merged ? 200 : 409,
