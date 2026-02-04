@@ -438,15 +438,28 @@ export async function registerWebhookFailure(
   }
 }
 
-export async function listRecentWebhookRuns(limit = 50): Promise<WebhookRun[]> {
+export async function listRecentWebhookRuns(
+  limit = 50,
+  platformType?: string
+): Promise<WebhookRun[]> {
   const safeLimit = Math.min(Math.max(limit, 1), 200);
-  const result = await pool.query<WebhookRun>(
-    `SELECT *
-     FROM remote_agent_automation_runs
-     ORDER BY created_at DESC
-     LIMIT $1`,
-    [safeLimit]
-  );
+  const result = platformType
+    ? await pool.query<WebhookRun>(
+        `SELECT r.*
+         FROM remote_agent_automation_runs r
+         INNER JOIN remote_agent_automation_chains c ON c.id = r.chain_id
+         WHERE c.platform_type = $1
+         ORDER BY r.created_at DESC
+         LIMIT $2`,
+        [platformType, safeLimit]
+      )
+    : await pool.query<WebhookRun>(
+        `SELECT r.*
+         FROM remote_agent_automation_runs r
+         ORDER BY r.created_at DESC
+         LIMIT $1`,
+        [safeLimit]
+      );
   return result.rows;
 }
 
@@ -463,20 +476,34 @@ export async function listWebhookRunEvents(runId: string, limit = 200): Promise<
   return result.rows;
 }
 
-export async function getWebhookMetrics(): Promise<WebhookMetrics> {
+export async function getWebhookMetrics(platformType?: string): Promise<WebhookMetrics> {
+  const params: string[] = [];
+  const joinClause = platformType
+    ? 'INNER JOIN remote_agent_automation_chains c ON c.id = r.chain_id'
+    : '';
+  const whereClause = platformType ? 'WHERE c.platform_type = $1' : '';
+  if (platformType) {
+    params.push(platformType);
+  }
+
   const statusCountsResult = await pool.query<{ status: string; count: string }>(
-    `SELECT status, COUNT(*)::text AS count
-     FROM remote_agent_automation_runs
-     GROUP BY status`
+    `SELECT r.status, COUNT(*)::text AS count
+     FROM remote_agent_automation_runs r
+     ${joinClause}
+     ${whereClause}
+     GROUP BY r.status`,
+    params
   );
 
   const durationResult = await pool.query<{ avg_seconds: string | null; p95_seconds: string | null }>(
     `SELECT
-       AVG(EXTRACT(EPOCH FROM (finished_at - started_at)))::text AS avg_seconds,
-       PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (finished_at - started_at)))::text AS p95_seconds
-     FROM remote_agent_automation_runs
-     WHERE started_at IS NOT NULL
-       AND finished_at IS NOT NULL`
+       AVG(EXTRACT(EPOCH FROM (r.finished_at - r.started_at)))::text AS avg_seconds,
+       PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY EXTRACT(EPOCH FROM (r.finished_at - r.started_at)))::text AS p95_seconds
+     FROM remote_agent_automation_runs r
+     ${joinClause}
+     ${whereClause ? `${whereClause} AND` : 'WHERE'} r.started_at IS NOT NULL
+       AND r.finished_at IS NOT NULL`,
+    params
   );
 
   const statusCounts = statusCountsResult.rows.reduce<Record<string, number>>((acc, row) => {

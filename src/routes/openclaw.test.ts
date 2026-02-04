@@ -86,6 +86,8 @@ describe('openclaw bridge route', () => {
     await postOpenClawBridgeHandler(req, res);
 
     expect(intakeWebhookRun).toHaveBeenCalled();
+    expect(getWebhookMetrics).toHaveBeenCalledWith('openclaw');
+    expect(listRecentWebhookRuns).toHaveBeenCalledWith(5, 'openclaw');
     expect(finalizeWebhookRun).toHaveBeenCalledWith('run-1', 'executed', 'openclaw_status_report');
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith(
@@ -124,6 +126,11 @@ describe('openclaw bridge route', () => {
       expect.objectContaining({
         status: 'blocked_policy',
         reason: 'command_not_allowed',
+      })
+    );
+    expect(res.json).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        allowedCommands: expect.any(Array),
       })
     );
   });

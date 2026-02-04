@@ -112,7 +112,10 @@ function buildPolicy(
 }
 
 async function executeStatusReport(command: string): Promise<OpenClawStatusSummary> {
-  const [metrics, recentRuns] = await Promise.all([getWebhookMetrics(), listRecentWebhookRuns(5)]);
+  const [metrics, recentRuns] = await Promise.all([
+    getWebhookMetrics('openclaw'),
+    listRecentWebhookRuns(5, 'openclaw'),
+  ]);
 
   return {
     command,
@@ -232,7 +235,6 @@ export async function postOpenClawBridgeHandler(req: Request, res: Response): Pr
       runId: intake.run.id,
       chainId: intake.chain.id,
       reason: intake.reason ?? intake.run.reason ?? 'policy_blocked',
-      allowedCommands,
     });
     return;
   }
