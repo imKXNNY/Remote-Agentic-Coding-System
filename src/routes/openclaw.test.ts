@@ -29,10 +29,16 @@ function createResponse(): MockResponse {
 }
 
 describe('openclaw bridge route', () => {
+  const originalEnv = { ...process.env };
+
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.OPENCLAW_BRIDGE_SHARED_SECRET = 'secret-123';
     process.env.OPENCLAW_BRIDGE_ALLOWED_COMMANDS = '/status';
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
   });
 
   test('rejects requests with invalid secret', async () => {
@@ -150,5 +156,39 @@ describe('openclaw bridge route', () => {
       })
     );
     expect(registerWebhookFailure).not.toHaveBeenCalled();
+  });
+
+  test('returns execution_failed when command is allowlisted but not implemented', async () => {
+    process.env.OPENCLAW_BRIDGE_ALLOWED_COMMANDS = '/status,/noop';
+    (intakeWebhookRun as unknown as jest.Mock).mockResolvedValueOnce({
+      decision: 'accepted',
+      chain: { id: 'chain-4' },
+      run: { id: 'run-4' },
+    });
+
+    const req = {
+      body: {
+        eventId: 'evt-4',
+        conversationId: 'openclaw:thread-4',
+        repositoryFullName: 'imKXNNY/Remote-Agentic-Coding-System',
+        command: '/noop',
+      },
+      header: jest.fn().mockReturnValue('secret-123'),
+    } as unknown as Request;
+    const res = createResponse();
+
+    await postOpenClawBridgeHandler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(500);
+    expect(registerWebhookFailure).toHaveBeenCalledWith(
+      'chain-4',
+      'run-4',
+      expect.stringContaining('OPENCLAW_BRIDGE_ALLOWED_COMMANDS')
+    );
+    expect(finalizeWebhookRun).toHaveBeenCalledWith(
+      'run-4',
+      'paused',
+      expect.stringContaining('openclaw_bridge_error')
+    );
   });
 });

@@ -1,4 +1,4 @@
-import { createHash } from 'crypto';
+import { createHash, timingSafeEqual } from 'crypto';
 import { Router } from 'express';
 import type { Request, Response } from 'express';
 import {
@@ -139,7 +139,16 @@ export async function postOpenClawBridgeHandler(req: Request, res: Response): Pr
   }
 
   const providedSecret = req.header('x-openclaw-shared-secret')?.trim();
-  if (!providedSecret || providedSecret !== configuredSecret) {
+  if (!providedSecret) {
+    res.status(401).json({ status: 'invalid_secret' });
+    return;
+  }
+  const providedBuffer = Buffer.from(providedSecret, 'utf8');
+  const configuredBuffer = Buffer.from(configuredSecret, 'utf8');
+  if (
+    providedBuffer.length !== configuredBuffer.length ||
+    !timingSafeEqual(providedBuffer, configuredBuffer)
+  ) {
     res.status(401).json({ status: 'invalid_secret' });
     return;
   }
@@ -239,25 +248,31 @@ export async function postOpenClawBridgeHandler(req: Request, res: Response): Pr
   const chainId = intake.chain.id;
 
   try {
-    if (commandToken !== '/status') {
-      throw new Error(`Unsupported OpenClaw bridge command: ${commandToken}`);
+    if (!allowedCommands.includes(commandToken)) {
+      throw new Error(`Command not allowlisted: ${commandToken}`);
     }
 
-    const summary = await executeStatusReport(commandToken);
-    await finalizeWebhookRun(runId, 'executed', 'openclaw_status_report');
+    if (commandToken === '/status') {
+      const summary = await executeStatusReport(commandToken);
+      await finalizeWebhookRun(runId, 'executed', 'openclaw_status_report');
 
-    res.status(200).json({
-      status: 'executed',
-      eventId: payload.eventId,
-      runId,
-      chainId,
-      result: summary,
-    });
-    return;
+      res.status(200).json({
+        status: 'executed',
+        eventId: payload.eventId,
+        runId,
+        chainId,
+        result: summary,
+      });
+      return;
+    }
+
+    throw new Error(
+      `Command "${commandToken}" is allowlisted by OPENCLAW_BRIDGE_ALLOWED_COMMANDS but not implemented`
+    );
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     await registerWebhookFailure(chainId, runId, message);
-    await finalizeWebhookRun(runId, 'blocked_policy', `openclaw_bridge_error:${message}`);
+    await finalizeWebhookRun(runId, 'paused', `openclaw_bridge_error:${message}`);
 
     res.status(500).json({
       status: 'execution_failed',
