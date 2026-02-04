@@ -105,6 +105,8 @@ Authorized maintainer: a repository maintainer with write/admin permissions who 
 - `@remote-agent resume-loop <chain-id> <reason>`
 - `@remote-agent override-cooldown <chain-id> <reason>`
 - `@remote-agent override-circuit-breaker <reason>` (repository scoped)
+- `@remote-agent merge-gate <pr-number> [--dry-run]`
+- `@remote-agent auto-merge <pr-number> [--dry-run] [--override <reason>]`
 - `@remote-agent disable-auto <scope>` where scope is one of: `repo`, `issue`, `pr`
 - Override actions are auditable and record `actor`, `reason`, `action`, and scope metadata.
 
@@ -198,4 +200,17 @@ Success SLO candidates:
   - `resume-loop <chain-id> <reason>`
   - `override-cooldown <chain-id> <reason>`
   - `override-circuit-breaker <reason>` (repository scoped)
+  - `auto-merge <pr-number> --override <reason>` (merge-gate bypass)
 - All override actions are recorded with `actor`, `reason`, `action`, and scope metadata.
+
+## Merge-Gate Policy (Issue #50)
+
+Preconditions for autonomous merge:
+- all required checks green (`WEBHOOK_MERGE_GATE_REQUIRED_CHECKS` or all observed checks)
+- no active `CHANGES_REQUESTED` review blockers
+- PR is mergeable and not behind base branch
+
+Decision contract:
+- `decision: allow|deny`
+- explicit `denyReasons` such as `checks_pending`, `checks_failed`, `checks_missing`, `review_changes_requested`, `branch_not_up_to_date`
+- dry-run evaluation supported via `merge-gate` and `auto-merge --dry-run`

@@ -56,6 +56,33 @@ Expected response payload:
 - `status: control_applied`
 - `action: override_circuit_breaker`
 
+### Evaluate merge gate (no side effects)
+
+```text
+@remote-agent merge-gate <pr-number> [--dry-run]
+```
+
+Expected response payload:
+- `status: merge_gate_passed` or `merge_gate_denied`
+- `decision: allow|deny`
+- `denyReasons: [...]`
+
+### Auto-merge with merge gate policy
+
+```text
+@remote-agent auto-merge <pr-number> [--dry-run] [--override <reason>]
+```
+
+Behavior:
+- Denies merge if gate decision is `deny` and no override is provided.
+- Allows merge if gate decision is `allow`.
+- Allows audited bypass only with explicit `--override <reason>` by maintainer.
+
+Expected response payload:
+- `status: auto_merged` (merge performed)
+- `status: auto_merge_dry_run` (dry-run, no merge)
+- `status: merge_gate_denied` (blocked)
+
 ## Diagnostics and Observability
 
 - Inspect run ledger: `GET /api/github/webhook-runs`
@@ -67,6 +94,11 @@ Look for reason codes:
 - `circuit_breaker_open`
 - `circuit_breaker_tripped`
 - `manual_override`
+- `checks_missing`
+- `checks_pending`
+- `checks_failed`
+- `review_changes_requested`
+- `branch_not_up_to_date`
 
 ## Tunables (Environment)
 
@@ -76,4 +108,6 @@ Look for reason codes:
 - `WEBHOOK_CIRCUIT_BREAKER_SIGNATURE_THRESHOLD` (default `3`)
 - `WEBHOOK_CIRCUIT_BREAKER_WINDOW_MINUTES` (default `30`)
 - `WEBHOOK_CIRCUIT_BREAKER_COOLDOWN_MINUTES` (default `30`)
+- `WEBHOOK_MERGE_GATE_REQUIRED_CHECKS` (default empty => all observed checks must be green)
+- `WEBHOOK_MERGE_METHOD` (`squash` default, `merge`, `rebase`)
 

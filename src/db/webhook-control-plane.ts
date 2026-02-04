@@ -969,6 +969,23 @@ export async function addWebhookRunEvent(input: {
   });
 }
 
+export async function recordRepositoryAutomationOverride(input: {
+  repositoryFullName: string;
+  action: string;
+  actor: string;
+  reason: string;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  await recordAutomationOverride({
+    scopeType: 'repository',
+    scopeKey: input.repositoryFullName,
+    action: input.action,
+    actor: input.actor,
+    reason: input.reason,
+    metadata: input.metadata,
+  });
+}
+
 interface AutomationOverrideInput {
   scopeType: 'chain' | 'repository';
   scopeKey: string;
