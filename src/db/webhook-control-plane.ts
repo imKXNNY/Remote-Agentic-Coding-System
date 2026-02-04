@@ -75,7 +75,7 @@ export interface WebhookMetrics {
 }
 
 interface IntakeWebhookRunInput {
-  platformType: 'github';
+  platformType: 'github' | 'openclaw';
   conversationId: string;
   repositoryFullName: string;
   objectType: string;
