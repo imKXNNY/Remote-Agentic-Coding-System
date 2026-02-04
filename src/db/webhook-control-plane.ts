@@ -5,6 +5,7 @@ import {
   evaluateWebhookGuardrails,
   isTerminalWebhookRunStatus,
 } from '../utils/webhook-control-plane';
+import { WebhookPolicyDecision, WebhookPolicyReason, WebhookRiskTier } from '../utils/webhook-policy';
 
 export interface WebhookChain {
   id: string;
@@ -35,6 +36,11 @@ export interface WebhookRun {
   reason: string | null;
   is_mutating: boolean;
   failure_signature: string | null;
+  risk_tier: WebhookRiskTier | null;
+  policy_decision: WebhookPolicyDecision | null;
+  policy_reason: WebhookPolicyReason | null;
+  approved_by: string | null;
+  approved_at: Date | null;
   started_at: Date | null;
   finished_at: Date | null;
   expires_at: Date | null;
@@ -53,10 +59,13 @@ interface IntakeWebhookRunInput {
   action: string;
   headSha?: string | null;
   isMutating: boolean;
+  policyDecision: WebhookPolicyDecision;
+  policyReason: WebhookPolicyReason;
+  riskTier: WebhookRiskTier;
 }
 
 interface IntakeDecision {
-  decision: 'accepted' | 'deduped' | 'replay_inflight' | 'paused';
+  decision: 'accepted' | 'deduped' | 'replay_inflight' | 'paused' | 'requires_approval' | 'blocked';
   run: WebhookRun | null;
   chain: WebhookChain;
   reason?: string;
@@ -139,6 +148,9 @@ export async function intakeWebhookRun(input: IntakeWebhookRunInput): Promise<In
         status: 'paused',
         reason: guardrail.reason,
         isMutating: input.isMutating,
+        riskTier: input.riskTier,
+        policyDecision: input.policyDecision,
+        policyReason: input.policyReason,
       });
       if (!pausedRun) {
         const replay = await findExistingDedupeRun(client, input.dedupeKey);
@@ -172,6 +184,73 @@ export async function intakeWebhookRun(input: IntakeWebhookRunInput): Promise<In
       };
     }
 
+    if (input.policyDecision === 'blocked') {
+      const blockedRun = await insertRun(client, {
+        chainId: chainAfterWindowReset.id,
+        deliveryId: input.deliveryId,
+        dedupeKey: input.dedupeKey,
+        eventType: input.eventType,
+        action: input.action,
+        headSha: input.headSha ?? null,
+        status: 'blocked_policy',
+        reason: input.policyReason,
+        isMutating: input.isMutating,
+        riskTier: input.riskTier,
+        policyDecision: input.policyDecision,
+        policyReason: input.policyReason,
+      });
+      if (!blockedRun) {
+        const replay = await findExistingDedupeRun(client, input.dedupeKey);
+        if (replay) {
+          await client.query('COMMIT');
+          return {
+            decision: isTerminalWebhookRunStatus(replay.status) ? 'deduped' : 'replay_inflight',
+            run: replay,
+            chain: chainAfterWindowReset,
+          };
+        }
+        throw new Error('Failed to insert blocked webhook run and no existing dedupe run found');
+      }
+      await client.query('COMMIT');
+      return { decision: 'blocked', run: blockedRun, chain: chainAfterWindowReset, reason: input.policyReason };
+    }
+
+    if (input.policyDecision === 'requires_approval') {
+      const approvalRun = await insertRun(client, {
+        chainId: chainAfterWindowReset.id,
+        deliveryId: input.deliveryId,
+        dedupeKey: input.dedupeKey,
+        eventType: input.eventType,
+        action: input.action,
+        headSha: input.headSha ?? null,
+        status: 'requires_approval',
+        reason: input.policyReason,
+        isMutating: input.isMutating,
+        riskTier: input.riskTier,
+        policyDecision: input.policyDecision,
+        policyReason: input.policyReason,
+      });
+      if (!approvalRun) {
+        const replay = await findExistingDedupeRun(client, input.dedupeKey);
+        if (replay) {
+          await client.query('COMMIT');
+          return {
+            decision: isTerminalWebhookRunStatus(replay.status) ? 'deduped' : 'replay_inflight',
+            run: replay,
+            chain: chainAfterWindowReset,
+          };
+        }
+        throw new Error('Failed to insert approval webhook run and no existing dedupe run found');
+      }
+      await client.query('COMMIT');
+      return {
+        decision: 'requires_approval',
+        run: approvalRun,
+        chain: chainAfterWindowReset,
+        reason: input.policyReason,
+      };
+    }
+
     const acceptedRun = await insertRun(client, {
       chainId: chainAfterWindowReset.id,
       deliveryId: input.deliveryId,
@@ -182,6 +261,9 @@ export async function intakeWebhookRun(input: IntakeWebhookRunInput): Promise<In
       status: 'accepted',
       reason: null,
       isMutating: input.isMutating,
+      riskTier: input.riskTier,
+      policyDecision: input.policyDecision,
+      policyReason: input.policyReason,
     });
     if (!acceptedRun) {
       const replay = await findExistingDedupeRun(client, input.dedupeKey);
@@ -318,6 +400,21 @@ export async function listRecentWebhookRuns(limit = 50): Promise<WebhookRun[]> {
   return result.rows;
 }
 
+export async function approveWebhookRun(runId: string, approvedBy: string): Promise<WebhookRun | null> {
+  const result = await pool.query<WebhookRun>(
+    `UPDATE remote_agent_automation_runs
+     SET status = 'accepted',
+         approved_by = $2,
+         approved_at = NOW(),
+         reason = COALESCE(reason, 'approved_by_maintainer')
+     WHERE id = $1
+       AND status = 'requires_approval'
+     RETURNING *`,
+    [runId, approvedBy]
+  );
+  return result.rows[0] ?? null;
+}
+
 interface InsertRunInput {
   chainId: string;
   deliveryId: string;
@@ -328,6 +425,9 @@ interface InsertRunInput {
   status: WebhookRunStatus;
   reason: string | null | undefined;
   isMutating: boolean;
+  riskTier: WebhookRiskTier;
+  policyDecision: WebhookPolicyDecision;
+  policyReason: WebhookPolicyReason;
 }
 
 async function findExistingDedupeRun(
@@ -349,9 +449,9 @@ async function findExistingDedupeRun(
 async function insertRun(client: { query: typeof pool.query }, input: InsertRunInput): Promise<WebhookRun | null> {
   const result = await client.query<WebhookRun>(
     `INSERT INTO remote_agent_automation_runs
-      (chain_id, delivery_id, dedupe_key, event_type, action, head_sha, status, reason, is_mutating, started_at, expires_at)
+      (chain_id, delivery_id, dedupe_key, event_type, action, head_sha, status, reason, is_mutating, risk_tier, policy_decision, policy_reason, started_at, expires_at)
      VALUES
-      ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW() + INTERVAL '24 hours')
+      ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW() + INTERVAL '24 hours')
      ON CONFLICT (dedupe_key) DO NOTHING
      RETURNING *`,
     [
@@ -364,6 +464,9 @@ async function insertRun(client: { query: typeof pool.query }, input: InsertRunI
       input.status,
       input.reason ?? null,
       input.isMutating,
+      input.riskTier,
+      input.policyDecision,
+      input.policyReason,
     ]
   );
 

@@ -70,6 +70,15 @@ export async function ensureSchemaCompatibility(): Promise<void> {
   `);
 
   await pool.query(`
+    ALTER TABLE remote_agent_automation_runs
+    ADD COLUMN IF NOT EXISTS risk_tier VARCHAR(10),
+    ADD COLUMN IF NOT EXISTS policy_decision VARCHAR(30),
+    ADD COLUMN IF NOT EXISTS policy_reason TEXT,
+    ADD COLUMN IF NOT EXISTS approved_by VARCHAR(255),
+    ADD COLUMN IF NOT EXISTS approved_at TIMESTAMP WITH TIME ZONE
+  `);
+
+  await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_remote_agent_automation_runs_chain_created
       ON remote_agent_automation_runs(chain_id, created_at DESC)
   `);
