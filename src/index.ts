@@ -27,6 +27,7 @@ import { resolveWorkspacePath } from './utils/paths';
 import { startMcpServer } from './mcp-server';
 import uploadRouter from './routes/upload';
 import githubRouter from './routes/github';
+import openClawRouter from './routes/openclaw';
 import { asyncHandler } from './utils/async-handler';
 import { getGitHubAuthPreflight } from './utils/github-auth';
 
@@ -173,6 +174,9 @@ async function main(): Promise<void> {
 
   // JSON parsing for all other endpoints
   app.use(express.json());
+
+  // OpenClaw webhook bridge endpoint
+  app.use('/webhooks', openClawRouter);
 
   // Health check endpoints
   app.get('/health', (_req, res) => {
