@@ -168,3 +168,32 @@ Success SLO candidates:
 - #30 - Implement webhook control-plane primitives (idempotency, chain state, iteration/cooldown guardrails).
 - #31 - Implement policy engine + approval gates (repo/branch allowlist, command/path restrictions, risk tiers).
 - #32 - Implement automation observability and audit trail (run ledger, metrics, replay-safe statuses, dashboards).
+- #42 - Add safety hardening controls (repository budget caps, circuit breaker, auditable manual overrides).
+
+## Implemented Safety Hardening (Issue #42)
+
+### Budget cap
+- Repository-scoped mutating run budget gate in intake path.
+- Default tunables:
+  - `WEBHOOK_REPO_MUTATING_BUDGET_LIMIT=25`
+  - `WEBHOOK_REPO_MUTATING_BUDGET_WINDOW_MINUTES=60`
+- Deterministic block reason: `budget_exhausted`.
+
+### Circuit breaker
+- Repository circuit breaker opens when either threshold is reached in the active window:
+  - total failures threshold (`WEBHOOK_CIRCUIT_BREAKER_FAILURE_THRESHOLD`)
+  - repeated signature threshold (`WEBHOOK_CIRCUIT_BREAKER_SIGNATURE_THRESHOLD`)
+- Default tunables:
+  - `WEBHOOK_CIRCUIT_BREAKER_WINDOW_MINUTES=30`
+  - `WEBHOOK_CIRCUIT_BREAKER_COOLDOWN_MINUTES=30`
+- Deterministic reasons:
+  - intake block while open: `circuit_breaker_open`
+  - trip event reason: `circuit_breaker_tripped`
+
+### Override flow (auditable)
+- Maintainer-only control commands:
+  - `pause-loop <chain-id> <reason>`
+  - `resume-loop <chain-id> <reason>`
+  - `override-cooldown <chain-id> <reason>`
+  - `override-circuit-breaker <reason>` (repository scoped)
+- All override actions are recorded with `actor`, `reason`, `action`, and scope metadata.

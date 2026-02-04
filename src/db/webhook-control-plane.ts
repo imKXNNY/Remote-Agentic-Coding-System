@@ -59,6 +59,23 @@ export interface WebhookRunEvent {
   created_at: Date;
 }
 
+export interface AutomationCircuitBreaker {
+  id: string;
+  repository_full_name: string;
+  status: 'open' | 'closed';
+  reason: string | null;
+  failure_signature: string | null;
+  failure_count: number;
+  window_started_at: Date | null;
+  cooldown_until: Date | null;
+  tripped_at: Date | null;
+  overridden_by: string | null;
+  override_reason: string | null;
+  overridden_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export interface WebhookMetrics {
   statusCounts: Record<string, number>;
   totals: {
@@ -112,6 +129,12 @@ const MAX_ITERATIONS_PER_CHAIN = parseEnvInt('WEBHOOK_MAX_ITERATIONS_PER_CHAIN',
 const MAX_MUTATING_RUNS_24H = parseEnvInt('WEBHOOK_MAX_MUTATING_RUNS_24H', 5);
 const COOLDOWN_MINUTES = parseEnvInt('WEBHOOK_MUTATION_COOLDOWN_MINUTES', 10);
 const MAX_INFLIGHT_RUNS = parseEnvInt('WEBHOOK_MAX_INFLIGHT_RUNS', 20);
+const REPO_MUTATING_BUDGET_LIMIT = parseEnvInt('WEBHOOK_REPO_MUTATING_BUDGET_LIMIT', 25);
+const REPO_MUTATING_BUDGET_WINDOW_MINUTES = parseEnvInt('WEBHOOK_REPO_MUTATING_BUDGET_WINDOW_MINUTES', 60);
+const CIRCUIT_BREAKER_FAILURE_THRESHOLD = parseEnvInt('WEBHOOK_CIRCUIT_BREAKER_FAILURE_THRESHOLD', 5);
+const CIRCUIT_BREAKER_SIGNATURE_THRESHOLD = parseEnvInt('WEBHOOK_CIRCUIT_BREAKER_SIGNATURE_THRESHOLD', 3);
+const CIRCUIT_BREAKER_WINDOW_MINUTES = parseEnvInt('WEBHOOK_CIRCUIT_BREAKER_WINDOW_MINUTES', 30);
+const CIRCUIT_BREAKER_COOLDOWN_MINUTES = parseEnvInt('WEBHOOK_CIRCUIT_BREAKER_COOLDOWN_MINUTES', 30);
 
 export async function intakeWebhookRun(input: IntakeWebhookRunInput): Promise<IntakeDecision> {
   const client = await pool.connect();
@@ -280,6 +303,98 @@ export async function intakeWebhookRun(input: IntakeWebhookRunInput): Promise<In
       };
     }
 
+    if (input.isMutating) {
+      const activeCircuitBreaker = await getActiveCircuitBreakerForRepository(
+        client,
+        input.repositoryFullName
+      );
+      if (activeCircuitBreaker) {
+        const pausedCircuitRun = await insertRun(client, {
+          chainId: chainAfterWindowReset.id,
+          deliveryId: input.deliveryId,
+          dedupeKey: input.dedupeKey,
+          eventType: input.eventType,
+          action: input.action,
+          headSha: input.headSha ?? null,
+          status: 'paused',
+          reason: WEBHOOK_RUN_REASONS.CIRCUIT_BREAKER_OPEN,
+          isMutating: input.isMutating,
+          riskTier: input.riskTier,
+          policyDecision: input.policyDecision,
+          policyReason: input.policyReason,
+        });
+        if (!pausedCircuitRun) {
+          const replay = await findExistingDedupeRun(client, input.dedupeKey);
+          if (replay) {
+            await client.query('COMMIT');
+            return {
+              decision: isTerminalWebhookRunStatus(replay.status) ? 'deduped' : 'replay_inflight',
+              run: replay,
+              chain: chainAfterWindowReset,
+            };
+          }
+          throw new Error('Failed to insert circuit-breaker-paused run and no existing dedupe run found');
+        }
+        await client.query('COMMIT');
+        return {
+          decision: 'paused',
+          run: pausedCircuitRun,
+          chain: chainAfterWindowReset,
+          reason: WEBHOOK_RUN_REASONS.CIRCUIT_BREAKER_OPEN,
+        };
+      }
+
+      const repositoryMutatingBudgetResult = await client.query<{ count: string }>(
+        `SELECT COUNT(*)::text AS count
+         FROM remote_agent_automation_runs r
+         INNER JOIN remote_agent_automation_chains c ON c.id = r.chain_id
+         WHERE c.repository_full_name = $1
+           AND r.is_mutating = TRUE
+           AND r.created_at > NOW() - (($2::text || ' minutes')::interval)
+           AND r.status IN ('accepted', 'executed')`,
+        [input.repositoryFullName, String(REPO_MUTATING_BUDGET_WINDOW_MINUTES)]
+      );
+      const repositoryMutatingRuns = Number.parseInt(
+        repositoryMutatingBudgetResult.rows[0]?.count ?? '0',
+        10
+      );
+      if (repositoryMutatingRuns >= REPO_MUTATING_BUDGET_LIMIT) {
+        const pausedBudgetRun = await insertRun(client, {
+          chainId: chainAfterWindowReset.id,
+          deliveryId: input.deliveryId,
+          dedupeKey: input.dedupeKey,
+          eventType: input.eventType,
+          action: input.action,
+          headSha: input.headSha ?? null,
+          status: 'paused',
+          reason: WEBHOOK_RUN_REASONS.BUDGET_EXHAUSTED,
+          isMutating: input.isMutating,
+          riskTier: input.riskTier,
+          policyDecision: input.policyDecision,
+          policyReason: input.policyReason,
+        });
+        if (!pausedBudgetRun) {
+          const replay = await findExistingDedupeRun(client, input.dedupeKey);
+          if (replay) {
+            await client.query('COMMIT');
+            return {
+              decision: isTerminalWebhookRunStatus(replay.status) ? 'deduped' : 'replay_inflight',
+              run: replay,
+              chain: chainAfterWindowReset,
+            };
+          }
+          throw new Error('Failed to insert budget-paused run and no existing dedupe run found');
+        }
+        await client.query('COMMIT');
+        return {
+          decision: 'paused',
+          run: pausedBudgetRun,
+          chain: chainAfterWindowReset,
+          reason: WEBHOOK_RUN_REASONS.BUDGET_EXHAUSTED,
+        };
+      }
+    }
+
     const inflightRunsResult = await client.query<{ count: string }>(
       `SELECT COUNT(*)::text AS count
        FROM remote_agent_automation_runs
@@ -421,7 +536,12 @@ export async function registerWebhookFailure(
   runId: string,
   errorMessage: string,
   maxFailuresBeforePause = 2
-): Promise<{ shouldPause: boolean; failureSignature: string; repeatedFailureCount: number }> {
+): Promise<{
+  shouldPause: boolean;
+  failureSignature: string;
+  repeatedFailureCount: number;
+  circuitBreakerTripped: boolean;
+}> {
   const signature = buildFailureSignature(errorMessage, 1, []);
   const client = await pool.connect();
 
@@ -469,13 +589,43 @@ export async function registerWebhookFailure(
       },
     });
 
+    const chainResult = await client.query<{ repository_full_name: string }>(
+      `SELECT repository_full_name
+       FROM remote_agent_automation_chains
+       WHERE id = $1`,
+      [chainId]
+    );
+    const repositoryFullName = chainResult.rows[0]?.repository_full_name;
+    const circuitBreakerTripped = repositoryFullName
+      ? await evaluateAndTripCircuitBreaker(client, {
+          repositoryFullName,
+          failureSignature: signature,
+          triggeringRunId: runId,
+        })
+      : false;
+
+    if (circuitBreakerTripped) {
+      await safeEmitRunEvent(client, {
+        runId,
+        chainId,
+        eventType: 'circuit_breaker_tripped',
+        status: 'paused',
+        message: 'Circuit breaker opened for repository',
+        metadata: {
+          repositoryFullName,
+          failureSignature: signature,
+        },
+      });
+    }
+
     await client.query('COMMIT');
 
     const repeatCount = chainUpdate.rows[0]?.repeated_failure_count ?? 1;
     return {
-      shouldPause: repeatCount >= maxFailuresBeforePause,
+      shouldPause: repeatCount >= maxFailuresBeforePause || circuitBreakerTripped,
       failureSignature: signature,
       repeatedFailureCount: repeatCount,
+      circuitBreakerTripped,
     };
   } catch (error) {
     await client.query('ROLLBACK');
@@ -590,7 +740,7 @@ export async function approveWebhookRun(runId: string, approvedBy: string): Prom
      RETURNING *`,
     [runId, approvedBy]
   );
-  const approvedRun = result.rows[0] ?? null;
+  const approvedRun = result.rows.length > 0 ? result.rows[0] : null;
   if (approvedRun) {
     await safeEmitRunEvent(pool, {
       runId: approvedRun.id,
@@ -608,6 +758,64 @@ export async function approveWebhookRun(runId: string, approvedBy: string): Prom
   return approvedRun;
 }
 
+export async function pauseWebhookChain(
+  chainId: string,
+  actor: string,
+  reason: string
+): Promise<WebhookChain | null> {
+  const result = await pool.query<WebhookChain>(
+    `UPDATE remote_agent_automation_chains
+     SET status = 'paused',
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [chainId]
+  );
+  const chain = result.rows.length > 0 ? result.rows[0] : null;
+  if (chain) {
+    await recordAutomationOverride({
+      scopeType: 'chain',
+      scopeKey: chain.id,
+      action: 'pause_loop',
+      actor,
+      reason,
+      metadata: {
+        repositoryFullName: chain.repository_full_name,
+      },
+    });
+  }
+  return chain;
+}
+
+export async function resumeWebhookChain(
+  chainId: string,
+  actor: string,
+  reason: string
+): Promise<WebhookChain | null> {
+  const result = await pool.query<WebhookChain>(
+    `UPDATE remote_agent_automation_chains
+     SET status = 'active',
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [chainId]
+  );
+  const chain = result.rows.length > 0 ? result.rows[0] : null;
+  if (chain) {
+    await recordAutomationOverride({
+      scopeType: 'chain',
+      scopeKey: chain.id,
+      action: 'resume_loop',
+      actor,
+      reason,
+      metadata: {
+        repositoryFullName: chain.repository_full_name,
+      },
+    });
+  }
+  return chain;
+}
+
 export async function setWebhookChainCooldown(chainId: string, cooldownUntil: Date): Promise<void> {
   await pool.query(
     `UPDATE remote_agent_automation_chains
@@ -616,6 +824,69 @@ export async function setWebhookChainCooldown(chainId: string, cooldownUntil: Da
      WHERE id = $1`,
     [chainId, cooldownUntil]
   );
+}
+
+export async function overrideWebhookChainCooldown(
+  chainId: string,
+  actor: string,
+  reason: string
+): Promise<WebhookChain | null> {
+  const result = await pool.query<WebhookChain>(
+    `UPDATE remote_agent_automation_chains
+     SET cooldown_until = NOW(),
+         updated_at = NOW()
+     WHERE id = $1
+     RETURNING *`,
+    [chainId]
+  );
+  const chain = result.rows.length > 0 ? result.rows[0] : null;
+  if (chain) {
+    await recordAutomationOverride({
+      scopeType: 'chain',
+      scopeKey: chain.id,
+      action: 'override_cooldown',
+      actor,
+      reason,
+      metadata: {
+        repositoryFullName: chain.repository_full_name,
+      },
+    });
+  }
+  return chain;
+}
+
+export async function overrideRepositoryCircuitBreaker(
+  repositoryFullName: string,
+  actor: string,
+  reason: string
+): Promise<AutomationCircuitBreaker | null> {
+  const result = await pool.query<AutomationCircuitBreaker>(
+    `INSERT INTO remote_agent_automation_circuit_breakers
+      (repository_full_name, status, reason, overridden_by, override_reason, overridden_at, updated_at)
+     VALUES
+      ($1, 'closed', $2, $3, $4, NOW(), NOW())
+     ON CONFLICT (repository_full_name)
+     DO UPDATE SET status = 'closed',
+                   reason = EXCLUDED.reason,
+                   overridden_by = EXCLUDED.overridden_by,
+                   override_reason = EXCLUDED.override_reason,
+                   overridden_at = EXCLUDED.overridden_at,
+                   cooldown_until = NOW(),
+                   updated_at = NOW()
+     RETURNING *`,
+    [repositoryFullName, WEBHOOK_RUN_REASONS.MANUAL_OVERRIDE, actor, reason]
+  );
+  const breaker = result.rows.length > 0 ? result.rows[0] : null;
+  if (breaker) {
+    await recordAutomationOverride({
+      scopeType: 'repository',
+      scopeKey: repositoryFullName,
+      action: 'override_circuit_breaker',
+      actor,
+      reason,
+    });
+  }
+  return breaker;
 }
 
 export async function addWebhookRunEvent(input: {
@@ -634,6 +905,128 @@ export async function addWebhookRunEvent(input: {
     message: input.message ?? null,
     metadata: input.metadata ?? {},
   });
+}
+
+interface AutomationOverrideInput {
+  scopeType: 'chain' | 'repository';
+  scopeKey: string;
+  action: string;
+  actor: string;
+  reason: string;
+  metadata?: Record<string, unknown>;
+}
+
+async function recordAutomationOverride(input: AutomationOverrideInput): Promise<void> {
+  await pool.query(
+    `INSERT INTO remote_agent_automation_overrides
+      (scope_type, scope_key, action, actor, reason, metadata)
+     VALUES
+      ($1, $2, $3, $4, $5, $6::jsonb)`,
+    [
+      input.scopeType,
+      input.scopeKey,
+      input.action,
+      input.actor,
+      input.reason,
+      JSON.stringify(input.metadata ?? {}),
+    ]
+  );
+}
+
+async function getActiveCircuitBreakerForRepository(
+  client: Queryable,
+  repositoryFullName: string
+): Promise<AutomationCircuitBreaker | null> {
+  const result = await client.query<AutomationCircuitBreaker>(
+    `SELECT *
+     FROM remote_agent_automation_circuit_breakers
+     WHERE repository_full_name = $1
+       AND status = 'open'
+       AND (cooldown_until IS NULL OR cooldown_until > NOW())
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+    [repositoryFullName]
+  );
+  return result.rows[0] ?? null;
+}
+
+interface CircuitBreakerEvaluationInput {
+  repositoryFullName: string;
+  failureSignature: string;
+  triggeringRunId: string;
+}
+
+async function evaluateAndTripCircuitBreaker(
+  client: Queryable,
+  input: CircuitBreakerEvaluationInput
+): Promise<boolean> {
+  const windowArg = String(CIRCUIT_BREAKER_WINDOW_MINUTES);
+  const failureStatsResult = await client.query<{ total_failures: string; signature_failures: string }>(
+    `SELECT
+       COUNT(*)::text AS total_failures,
+       COUNT(*) FILTER (WHERE r.failure_signature = $2)::text AS signature_failures
+     FROM remote_agent_automation_runs r
+     INNER JOIN remote_agent_automation_chains c ON c.id = r.chain_id
+     WHERE c.repository_full_name = $1
+       AND r.created_at > NOW() - (($3::text || ' minutes')::interval)
+       AND r.failure_signature IS NOT NULL`,
+    [input.repositoryFullName, input.failureSignature, windowArg]
+  );
+
+  const totalFailures = Number.parseInt(failureStatsResult.rows[0]?.total_failures ?? '0', 10);
+  const signatureFailures = Number.parseInt(
+    failureStatsResult.rows[0]?.signature_failures ?? '0',
+    10
+  );
+  const shouldTrip =
+    totalFailures >= CIRCUIT_BREAKER_FAILURE_THRESHOLD ||
+    signatureFailures >= CIRCUIT_BREAKER_SIGNATURE_THRESHOLD;
+
+  if (!shouldTrip) {
+    return false;
+  }
+
+  await client.query(
+    `INSERT INTO remote_agent_automation_circuit_breakers
+      (repository_full_name, status, reason, failure_signature, failure_count, window_started_at, tripped_at, cooldown_until, updated_at)
+     VALUES
+      ($1, 'open', $2, $3, $4, NOW(), NOW(), NOW() + (($5::text || ' minutes')::interval), NOW())
+     ON CONFLICT (repository_full_name)
+     DO UPDATE SET status = 'open',
+                   reason = EXCLUDED.reason,
+                   failure_signature = EXCLUDED.failure_signature,
+                   failure_count = EXCLUDED.failure_count,
+                   window_started_at = EXCLUDED.window_started_at,
+                   tripped_at = EXCLUDED.tripped_at,
+                   cooldown_until = EXCLUDED.cooldown_until,
+                   updated_at = NOW()`,
+    [
+      input.repositoryFullName,
+      WEBHOOK_RUN_REASONS.CIRCUIT_BREAKER_TRIPPED,
+      input.failureSignature,
+      totalFailures,
+      String(CIRCUIT_BREAKER_COOLDOWN_MINUTES),
+    ]
+  );
+
+  await recordAutomationOverride({
+    scopeType: 'repository',
+    scopeKey: input.repositoryFullName,
+    action: 'circuit_breaker_trip',
+    actor: 'system',
+    reason: WEBHOOK_RUN_REASONS.CIRCUIT_BREAKER_TRIPPED,
+    metadata: {
+      triggeringRunId: input.triggeringRunId,
+      failureSignature: input.failureSignature,
+      totalFailures,
+      signatureFailures,
+      windowMinutes: CIRCUIT_BREAKER_WINDOW_MINUTES,
+      failureThreshold: CIRCUIT_BREAKER_FAILURE_THRESHOLD,
+      signatureThreshold: CIRCUIT_BREAKER_SIGNATURE_THRESHOLD,
+    },
+  });
+
+  return true;
 }
 
 interface Queryable {
@@ -733,7 +1126,7 @@ async function insertRun(client: Queryable, input: InsertRunInput): Promise<Webh
     ]
   );
 
-  const createdRun = result.rows[0] ?? null;
+  const createdRun = result.rows.length > 0 ? result.rows[0] : null;
   if (createdRun) {
     await safeEmitRunEvent(client, {
       runId: createdRun.id,

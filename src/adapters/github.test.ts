@@ -44,6 +44,10 @@ jest.mock('../db/webhook-control-plane', () => ({
   registerWebhookFailure: jest.fn(),
   setWebhookChainCooldown: jest.fn(),
   addWebhookRunEvent: jest.fn(),
+  pauseWebhookChain: jest.fn(),
+  resumeWebhookChain: jest.fn(),
+  overrideWebhookChainCooldown: jest.fn(),
+  overrideRepositoryCircuitBreaker: jest.fn(),
   approveWebhookRun: jest.fn(),
 }));
 jest.mock('../orchestrator/orchestrator', () => ({
@@ -58,6 +62,10 @@ describe('GitHubAdapter', () => {
     registerWebhookFailure: jest.Mock;
     setWebhookChainCooldown: jest.Mock;
     addWebhookRunEvent: jest.Mock;
+    pauseWebhookChain: jest.Mock;
+    resumeWebhookChain: jest.Mock;
+    overrideWebhookChainCooldown: jest.Mock;
+    overrideRepositoryCircuitBreaker: jest.Mock;
     approveWebhookRun: jest.Mock;
   };
 
@@ -120,6 +128,7 @@ describe('GitHubAdapter', () => {
         shouldPause: false,
         failureSignature: 'sig-1',
         repeatedFailureCount: 1,
+        circuitBreakerTripped: false,
       });
       jest.spyOn(adapter as any, 'getOrCreateCodebaseForRepo').mockRejectedValueOnce(new Error('setup failed'));
       jest.spyOn(adapter as any, 'sendMessage').mockResolvedValueOnce(undefined);
@@ -168,6 +177,7 @@ describe('GitHubAdapter', () => {
         shouldPause: true,
         failureSignature: 'sig-2',
         repeatedFailureCount: 1,
+        circuitBreakerTripped: false,
       });
       jest.spyOn(adapter as any, 'getOrCreateCodebaseForRepo').mockRejectedValueOnce(new Error('setup failed'));
       jest.spyOn(adapter as any, 'sendMessage').mockResolvedValueOnce(undefined);
@@ -394,6 +404,60 @@ describe('GitHubAdapter', () => {
           chainId: 'chain-2',
           runId: 'run-2',
         })
+      );
+    });
+
+    test('pause-loop command succeeds for maintainer', async () => {
+      webhookDb.pauseWebhookChain.mockResolvedValueOnce({ id: 'chain-1' });
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: { body: '@remote-agent pause-loop chain-1 too-many-failures', user: { login: 'u' } },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'maintainer' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.httpStatus).toBe(200);
+      expect(result.body).toEqual(expect.objectContaining({ status: 'control_applied', action: 'pause_loop' }));
+      expect(webhookDb.pauseWebhookChain).toHaveBeenCalledWith('chain-1', 'maintainer', 'too-many-failures');
+    });
+
+    test('override-circuit-breaker command succeeds for maintainer', async () => {
+      webhookDb.overrideRepositoryCircuitBreaker.mockResolvedValueOnce({ status: 'closed' });
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: { body: '@remote-agent override-circuit-breaker manual-unblock-after-check', user: { login: 'u' } },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'maintainer' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.httpStatus).toBe(200);
+      expect(result.body).toEqual(
+        expect.objectContaining({ status: 'control_applied', action: 'override_circuit_breaker' })
+      );
+      expect(webhookDb.overrideRepositoryCircuitBreaker).toHaveBeenCalledWith(
+        'imKXNNY/Remote-Agentic-Coding-System',
+        'maintainer',
+        'manual-unblock-after-check'
       );
     });
   });
