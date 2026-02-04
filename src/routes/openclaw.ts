@@ -6,6 +6,7 @@ import {
   getWebhookMetrics,
   intakeWebhookRun,
   listRecentWebhookRuns,
+  listWebhookRunEvents,
   registerWebhookFailure,
 } from '../db/webhook-control-plane';
 import { buildWebhookDedupeKey } from '../utils/webhook-control-plane';
@@ -36,6 +37,33 @@ interface OpenClawStatusSummary {
   }[];
 }
 
+type OpenClawCommandCapability = 'read_only' | 'needs_approval' | 'mutating';
+
+interface OpenClawCommandDefinition {
+  token: string;
+  capability: OpenClawCommandCapability;
+  execute?: (context: OpenClawCommandContext) => Promise<unknown>;
+}
+
+interface OpenClawCommandContext {
+  commandToken: string;
+  args: string[];
+}
+
+class UnsupportedOpenClawCommandError extends Error {
+  constructor(message?: string) {
+    super(message);
+    this.name = 'UnsupportedOpenClawCommandError';
+  }
+}
+
+class OpenClawValidationError extends Error {
+  constructor(message?: string) {
+    super(message);
+    this.name = 'OpenClawValidationError';
+  }
+}
+
 function parseCsv(value: string | undefined, fallback: string[]): string[] {
   if (!value) {
     return fallback;
@@ -50,7 +78,7 @@ function parseCsv(value: string | undefined, fallback: string[]): string[] {
 }
 
 function getOpenClawAllowedCommands(): string[] {
-  return parseCsv(process.env.OPENCLAW_BRIDGE_ALLOWED_COMMANDS, ['/status']);
+  return parseCsv(process.env.OPENCLAW_BRIDGE_ALLOWED_COMMANDS, ['/status', '/metrics', '/runs', '/events']);
 }
 
 function toDeterministicObjectNumber(conversationId: string): number {
@@ -86,16 +114,102 @@ function parsePayload(req: Request): OpenClawBridgePayload | null {
   };
 }
 
-function extractCommandToken(command: string): string {
-  return command.split(/\s+/)[0]?.toLowerCase() ?? '';
+function parseCommandParts(command: string): { token: string; args: string[] } {
+  const parts = command
+    .trim()
+    .split(/\s+/)
+    .map(part => part.trim())
+    .filter(Boolean);
+  const [token = '', ...args] = parts;
+  return {
+    token: token.toLowerCase(),
+    args,
+  };
+}
+
+function parseOptionalLimit(raw: string | undefined, fallback: number, max: number): number {
+  const parsed = Number.parseInt(raw ?? '', 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return Math.min(parsed, max);
+}
+
+function getOpenClawCommandRegistry(): Map<string, OpenClawCommandDefinition> {
+  const registry: OpenClawCommandDefinition[] = [
+    {
+      token: '/status',
+      capability: 'read_only',
+      execute: async ({ commandToken }) => executeStatusReport(commandToken),
+    },
+    {
+      token: '/metrics',
+      capability: 'read_only',
+      execute: async () => getWebhookMetrics('openclaw'),
+    },
+    {
+      token: '/runs',
+      capability: 'read_only',
+      execute: async ({ args }): Promise<unknown> => {
+        const limit = parseOptionalLimit(args[0], 10, 50);
+        const runs = await listRecentWebhookRuns({ limit, platformType: 'openclaw' });
+        return runs.map(run => ({
+          id: run.id,
+          status: run.status,
+          reason: run.reason,
+          created_at: run.created_at,
+          repository_full_name: run.repository_full_name ?? null,
+        }));
+      },
+    },
+    {
+      token: '/events',
+      capability: 'read_only',
+      execute: async ({ args }): Promise<unknown> => {
+        const runId = args[0]?.trim();
+        if (!runId) {
+          throw new OpenClawValidationError('Command "/events" requires <runId> argument');
+        }
+        const limit = parseOptionalLimit(args[1], 20, 200);
+        const events = await listWebhookRunEvents(runId, limit);
+        return events.map(event => ({
+          id: event.id,
+          event_type: event.event_type,
+          status: event.status,
+          message: event.message,
+          created_at: event.created_at,
+        }));
+      },
+    },
+    {
+      token: '/execute',
+      capability: 'mutating',
+    },
+  ];
+  return new Map(registry.map(definition => [definition.token, definition]));
+}
+
+function getEnabledCommandDefinitions(): Map<string, OpenClawCommandDefinition> {
+  const allowed = new Set(getOpenClawAllowedCommands().map(command => command.toLowerCase()));
+  const registry = getOpenClawCommandRegistry();
+  const enabled = new Map<string, OpenClawCommandDefinition>();
+  for (const [token, definition] of registry.entries()) {
+    if (allowed.has(token)) {
+      enabled.set(token, definition);
+    }
+  }
+  return enabled;
+}
+
+function isMutatingCapability(capability: OpenClawCommandCapability): boolean {
+  return capability === 'mutating';
 }
 
 function buildPolicy(
   payload: OpenClawBridgePayload,
-  commandToken: string,
-  allowedCommands: string[]
+  commandDefinition: OpenClawCommandDefinition | undefined
 ): WebhookPolicyResult {
-  if (!allowedCommands.includes(commandToken)) {
+  if (!commandDefinition) {
     return {
       decision: 'blocked',
       reason: 'command_not_allowed',
@@ -103,12 +217,22 @@ function buildPolicy(
     };
   }
 
-  return evaluateWebhookPolicy({
+  const policy = evaluateWebhookPolicy({
     repositoryFullName: payload.repositoryFullName,
     targetBranch: payload.targetBranch ?? 'stable',
     commandText: payload.command,
-    isMutating: false,
+    isMutating: isMutatingCapability(commandDefinition.capability),
   });
+
+  if (commandDefinition.capability === 'needs_approval' && policy.decision === 'allow') {
+    return {
+      decision: 'requires_approval',
+      reason: 'medium_risk_requires_approval',
+      riskTier: policy.riskTier === 'high' ? 'high' : 'medium',
+    };
+  }
+
+  return policy;
 }
 
 async function executeStatusReport(command: string): Promise<OpenClawStatusSummary> {
@@ -166,9 +290,11 @@ export async function postOpenClawBridgeHandler(req: Request, res: Response): Pr
     return;
   }
 
-  const commandToken = extractCommandToken(payload.command);
-  const allowedCommands = getOpenClawAllowedCommands();
-  const policy = buildPolicy(payload, commandToken, allowedCommands);
+  const parsedCommand = parseCommandParts(payload.command);
+  const commandToken = parsedCommand.token;
+  const enabledCommandDefinitions = getEnabledCommandDefinitions();
+  const commandDefinition = enabledCommandDefinitions.get(commandToken);
+  const policy = buildPolicy(payload, commandDefinition);
 
   const objectNumber = toDeterministicObjectNumber(payload.conversationId);
   const dedupeKey = buildWebhookDedupeKey({
@@ -191,7 +317,7 @@ export async function postOpenClawBridgeHandler(req: Request, res: Response): Pr
     eventType: 'openclaw.bridge.command',
     action: commandToken,
     headSha: null,
-    isMutating: false,
+    isMutating: commandDefinition ? isMutatingCapability(commandDefinition.capability) : false,
     policyDecision: policy.decision,
     policyReason: policy.reason,
     riskTier: policy.riskTier,
@@ -254,35 +380,47 @@ export async function postOpenClawBridgeHandler(req: Request, res: Response): Pr
   const chainId = intake.chain.id;
 
   try {
-    if (!allowedCommands.includes(commandToken)) {
-      throw new Error(`Command not allowlisted: ${commandToken}`);
+    if (!commandDefinition) {
+      throw new UnsupportedOpenClawCommandError(`Command "${commandToken}" is not enabled`);
+    }
+    if (!commandDefinition.execute) {
+      throw new UnsupportedOpenClawCommandError(
+        `Command "${commandToken}" is allowlisted but not implemented`
+      );
     }
 
-    if (commandToken === '/status') {
-      const summary = await executeStatusReport(commandToken);
-      await finalizeWebhookRun(runId, 'executed', 'openclaw_status_report');
-
-      res.status(200).json({
-        status: 'executed',
-        eventId: payload.eventId,
-        runId,
-        chainId,
-        result: summary,
-      });
-      return;
-    }
-
-    throw new Error(
-      `Command "${commandToken}" is allowlisted by OPENCLAW_BRIDGE_ALLOWED_COMMANDS but not implemented`
-    );
+    const result = await commandDefinition.execute({
+      commandToken,
+      args: parsedCommand.args,
+    });
+    await finalizeWebhookRun(runId, 'executed', 'openclaw_command_executed');
+    res.status(200).json({
+      status: 'executed',
+      eventId: payload.eventId,
+      runId,
+      chainId,
+      command: commandToken,
+      result,
+    });
+    return;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const publicError = 'execution_failed';
+    const isValidation = error instanceof OpenClawValidationError;
+    const isUnsupported = error instanceof UnsupportedOpenClawCommandError;
+    const publicError = isValidation
+      ? 'invalid_command_arguments'
+      : isUnsupported
+        ? 'unsupported_command'
+        : 'execution_failed';
     await registerWebhookFailure(chainId, runId, message);
-    await finalizeWebhookRun(runId, 'paused', 'openclaw_bridge_error');
+    await finalizeWebhookRun(
+      runId,
+      'paused',
+      isValidation || isUnsupported ? 'command_not_allowed' : 'openclaw_bridge_error'
+    );
 
-    res.status(500).json({
-      status: 'execution_failed',
+    res.status(isValidation ? 400 : isUnsupported ? 501 : 500).json({
+      status: publicError,
       eventId: payload.eventId,
       runId,
       chainId,

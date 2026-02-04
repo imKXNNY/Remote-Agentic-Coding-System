@@ -5,6 +5,7 @@ import {
   getWebhookMetrics,
   intakeWebhookRun,
   listRecentWebhookRuns,
+  listWebhookRunEvents,
   registerWebhookFailure,
 } from '../db/webhook-control-plane';
 
@@ -12,6 +13,7 @@ jest.mock('../db/webhook-control-plane', () => ({
   intakeWebhookRun: jest.fn(),
   getWebhookMetrics: jest.fn(),
   listRecentWebhookRuns: jest.fn(),
+  listWebhookRunEvents: jest.fn(),
   finalizeWebhookRun: jest.fn(),
   registerWebhookFailure: jest.fn(),
 }));
@@ -34,7 +36,7 @@ describe('openclaw bridge route', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     process.env.OPENCLAW_BRIDGE_SHARED_SECRET = 'secret-123';
-    process.env.OPENCLAW_BRIDGE_ALLOWED_COMMANDS = '/status';
+    process.env.OPENCLAW_BRIDGE_ALLOWED_COMMANDS = '/status,/metrics,/runs,/events';
   });
 
   afterEach(() => {
@@ -91,7 +93,7 @@ describe('openclaw bridge route', () => {
       limit: 5,
       platformType: 'openclaw',
     });
-    expect(finalizeWebhookRun).toHaveBeenCalledWith('run-1', 'executed', 'openclaw_status_report');
+    expect(finalizeWebhookRun).toHaveBeenCalledWith('run-1', 'executed', 'openclaw_command_executed');
     expect(res.status).toHaveBeenCalledWith(200);
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -99,6 +101,120 @@ describe('openclaw bridge route', () => {
         eventId: 'evt-1',
         runId: 'run-1',
         chainId: 'chain-1',
+        command: '/status',
+      })
+    );
+  });
+
+  test('executes /metrics command', async () => {
+    (intakeWebhookRun as unknown as jest.Mock).mockResolvedValueOnce({
+      decision: 'accepted',
+      chain: { id: 'chain-m' },
+      run: { id: 'run-m' },
+    });
+    (getWebhookMetrics as unknown as jest.Mock).mockResolvedValueOnce({
+      totals: {
+        totalRuns: 11,
+        executedRuns: 9,
+        blockedRuns: 1,
+        approvalRequiredRuns: 1,
+      },
+      statusCounts: { executed: 9 },
+      durationSeconds: { avg: 2, p95: 4 },
+    });
+
+    const req = {
+      body: {
+        eventId: 'evt-metrics',
+        conversationId: 'openclaw:metrics',
+        repositoryFullName: 'imKXNNY/Remote-Agentic-Coding-System',
+        command: '/metrics',
+      },
+      header: jest.fn().mockReturnValue('secret-123'),
+    } as unknown as Request;
+    const res = createResponse();
+
+    await postOpenClawBridgeHandler(req, res);
+
+    expect(getWebhookMetrics).toHaveBeenCalledWith('openclaw');
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'executed',
+        command: '/metrics',
+      })
+    );
+  });
+
+  test('executes /events command and returns redacted-safe subset', async () => {
+    (intakeWebhookRun as unknown as jest.Mock).mockResolvedValueOnce({
+      decision: 'accepted',
+      chain: { id: 'chain-e' },
+      run: { id: 'run-e' },
+    });
+    (listWebhookRunEvents as unknown as jest.Mock).mockResolvedValueOnce([
+      {
+        id: 'evt-raw-1',
+        event_type: 'run_created',
+        status: 'accepted',
+        message: 'created',
+        metadata: { token: 'secret' },
+        created_at: new Date('2026-02-04T00:00:00Z'),
+      },
+    ]);
+
+    const req = {
+      body: {
+        eventId: 'evt-events',
+        conversationId: 'openclaw:events',
+        repositoryFullName: 'imKXNNY/Remote-Agentic-Coding-System',
+        command: '/events run-abc 30',
+      },
+      header: jest.fn().mockReturnValue('secret-123'),
+    } as unknown as Request;
+    const res = createResponse();
+
+    await postOpenClawBridgeHandler(req, res);
+
+    expect(listWebhookRunEvents).toHaveBeenCalledWith('run-abc', 30);
+    expect(res.status).toHaveBeenCalledWith(200);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        result: [
+          expect.not.objectContaining({
+            metadata: expect.anything(),
+          }),
+        ],
+      })
+    );
+  });
+
+  test('returns 400 when /events is missing required runId argument', async () => {
+    (intakeWebhookRun as unknown as jest.Mock).mockResolvedValueOnce({
+      decision: 'accepted',
+      chain: { id: 'chain-e2' },
+      run: { id: 'run-e2' },
+    });
+
+    const req = {
+      body: {
+        eventId: 'evt-events-missing-runid',
+        conversationId: 'openclaw:events-missing',
+        repositoryFullName: 'imKXNNY/Remote-Agentic-Coding-System',
+        command: '/events',
+      },
+      header: jest.fn().mockReturnValue('secret-123'),
+    } as unknown as Request;
+    const res = createResponse();
+
+    await postOpenClawBridgeHandler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(finalizeWebhookRun).toHaveBeenCalledWith('run-e2', 'paused', 'command_not_allowed');
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'invalid_command_arguments',
+        error: 'invalid_command_arguments',
       })
     );
   });
@@ -116,7 +232,7 @@ describe('openclaw bridge route', () => {
         eventId: 'evt-2',
         conversationId: 'openclaw:thread-2',
         repositoryFullName: 'imKXNNY/Remote-Agentic-Coding-System',
-        command: '/execute dangerous',
+        command: '/unknown dangerous',
       },
       header: jest.fn().mockReturnValue('secret-123'),
     } as unknown as Request;
@@ -168,8 +284,8 @@ describe('openclaw bridge route', () => {
     expect(registerWebhookFailure).not.toHaveBeenCalled();
   });
 
-  test('returns execution_failed when command is allowlisted but not implemented', async () => {
-    process.env.OPENCLAW_BRIDGE_ALLOWED_COMMANDS = '/status,/noop';
+  test('returns unsupported_command when command is allowlisted but not implemented', async () => {
+    process.env.OPENCLAW_BRIDGE_ALLOWED_COMMANDS = '/status,/execute';
     (intakeWebhookRun as unknown as jest.Mock).mockResolvedValueOnce({
       decision: 'accepted',
       chain: { id: 'chain-4' },
@@ -181,7 +297,8 @@ describe('openclaw bridge route', () => {
         eventId: 'evt-4',
         conversationId: 'openclaw:thread-4',
         repositoryFullName: 'imKXNNY/Remote-Agentic-Coding-System',
-        command: '/noop',
+        targetBranch: 'feature/openclaw-v2',
+        command: '/execute',
       },
       header: jest.fn().mockReturnValue('secret-123'),
     } as unknown as Request;
@@ -189,21 +306,59 @@ describe('openclaw bridge route', () => {
 
     await postOpenClawBridgeHandler(req, res);
 
-    expect(res.status).toHaveBeenCalledWith(500);
+    expect(res.status).toHaveBeenCalledWith(501);
     expect(registerWebhookFailure).toHaveBeenCalledWith(
       'chain-4',
       'run-4',
-      expect.stringContaining('OPENCLAW_BRIDGE_ALLOWED_COMMANDS')
+      expect.stringContaining('allowlisted but not implemented')
     );
     expect(finalizeWebhookRun).toHaveBeenCalledWith(
       'run-4',
       'paused',
-      'openclaw_bridge_error'
+      'command_not_allowed'
     );
     expect(res.json).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: 'execution_failed',
-        error: 'execution_failed',
+        status: 'unsupported_command',
+        error: 'unsupported_command',
+      })
+    );
+  });
+
+  test('marks mutating capability commands as requiring approval on stable branch', async () => {
+    process.env.OPENCLAW_BRIDGE_ALLOWED_COMMANDS = '/status,/execute';
+    (intakeWebhookRun as unknown as jest.Mock).mockResolvedValueOnce({
+      decision: 'requires_approval',
+      chain: { id: 'chain-5' },
+      run: { id: 'run-5', reason: 'branch_not_allowed' },
+      reason: 'branch_not_allowed',
+    });
+
+    const req = {
+      body: {
+        eventId: 'evt-5',
+        conversationId: 'openclaw:thread-5',
+        repositoryFullName: 'imKXNNY/Remote-Agentic-Coding-System',
+        targetBranch: 'stable',
+        command: '/execute update something',
+      },
+      header: jest.fn().mockReturnValue('secret-123'),
+    } as unknown as Request;
+    const res = createResponse();
+
+    await postOpenClawBridgeHandler(req, res);
+
+    expect(intakeWebhookRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: '/execute',
+        isMutating: true,
+        policyDecision: 'requires_approval',
+      })
+    );
+    expect(res.status).toHaveBeenCalledWith(202);
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'requires_approval',
       })
     );
   });
