@@ -8,7 +8,7 @@ import {
   getGitHubApiErrorStatus,
   getGitHubAuthPreflight,
 } from '../utils/github-auth';
-import { listRecentWebhookRuns } from '../db/webhook-control-plane';
+import { getWebhookMetrics, listRecentWebhookRuns, listWebhookRunEvents } from '../db/webhook-control-plane';
 
 const router = Router();
 
@@ -105,5 +105,35 @@ export async function getGithubWebhookRunsHandler(req: Request, res: Response): 
 }
 
 router.get('/github/webhook-runs', asyncHandler(getGithubWebhookRunsHandler));
+
+/**
+ * GET /api/github/webhook-runs/:runId/events
+ * Returns lifecycle event timeline for a run.
+ * Query params: limit (optional, 1..500)
+ */
+export async function getGithubWebhookRunEventsHandler(req: Request, res: Response): Promise<void> {
+  const runId = req.params.runId;
+  if (!runId) {
+    res.status(400).json({ error: 'Missing runId path param' });
+    return;
+  }
+  const parsedLimit = typeof req.query.limit === 'string' ? Number.parseInt(req.query.limit, 10) : 200;
+  const limit = Number.isFinite(parsedLimit) ? Math.min(Math.max(parsedLimit, 1), 500) : 200;
+  const rows = await listWebhookRunEvents(runId, limit);
+  res.json(rows);
+}
+
+router.get('/github/webhook-runs/:runId/events', asyncHandler(getGithubWebhookRunEventsHandler));
+
+/**
+ * GET /api/github/webhook-metrics
+ * Returns loop-health metrics derived from run ledger.
+ */
+export async function getGithubWebhookMetricsHandler(_req: Request, res: Response): Promise<void> {
+  const metrics = await getWebhookMetrics();
+  res.json(metrics);
+}
+
+router.get('/github/webhook-metrics', asyncHandler(getGithubWebhookMetricsHandler));
 
 export default router;

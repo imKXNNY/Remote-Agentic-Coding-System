@@ -1,13 +1,20 @@
 import type { Request, Response } from 'express';
 import { Octokit } from '@octokit/rest';
-import { getGithubIssuesHandler, getGithubWebhookRunsHandler } from './github';
-import { listRecentWebhookRuns } from '../db/webhook-control-plane';
+import {
+  getGithubIssuesHandler,
+  getGithubWebhookMetricsHandler,
+  getGithubWebhookRunEventsHandler,
+  getGithubWebhookRunsHandler,
+} from './github';
+import { getWebhookMetrics, listRecentWebhookRuns, listWebhookRunEvents } from '../db/webhook-control-plane';
 
 jest.mock('@octokit/rest', () => ({
   Octokit: jest.fn(),
 }));
 jest.mock('../db/webhook-control-plane', () => ({
   listRecentWebhookRuns: jest.fn().mockResolvedValue([]),
+  listWebhookRunEvents: jest.fn().mockResolvedValue([]),
+  getWebhookMetrics: jest.fn().mockResolvedValue({ totals: { totalRuns: 0 }, statusCounts: {}, durationSeconds: { avg: 0, p95: 0 } }),
 }));
 
 type MockResponse = Response & {
@@ -184,5 +191,56 @@ describe('github webhook runs route', () => {
     const res = createResponse();
 
     await expect(getGithubWebhookRunsHandler(req, res)).rejects.toThrow('db unavailable');
+  });
+});
+
+describe('github webhook run events route', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('returns run event timeline', async () => {
+    (listWebhookRunEvents as unknown as jest.Mock).mockResolvedValueOnce([{ id: 'evt-1', event_type: 'run_created' }]);
+    const req = { params: { runId: 'run-1' }, query: {} } as unknown as Request;
+    const res = createResponse();
+
+    await getGithubWebhookRunEventsHandler(req, res);
+
+    expect(listWebhookRunEvents).toHaveBeenCalledWith('run-1', 200);
+    expect(res.json).toHaveBeenCalledWith([{ id: 'evt-1', event_type: 'run_created' }]);
+  });
+
+  test('returns 400 when runId missing', async () => {
+    const req = { params: {}, query: {} } as unknown as Request;
+    const res = createResponse();
+
+    await getGithubWebhookRunEventsHandler(req, res);
+
+    expect(res.status).toHaveBeenCalledWith(400);
+  });
+});
+
+describe('github webhook metrics route', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+  });
+
+  test('returns webhook metrics payload', async () => {
+    (getWebhookMetrics as unknown as jest.Mock).mockResolvedValueOnce({
+      totals: { totalRuns: 5 },
+      statusCounts: { executed: 3 },
+      durationSeconds: { avg: 2.5, p95: 4.1 },
+    });
+    const req = {} as unknown as Request;
+    const res = createResponse();
+
+    await getGithubWebhookMetricsHandler(req, res);
+
+    expect(getWebhookMetrics).toHaveBeenCalled();
+    expect(res.json).toHaveBeenCalledWith(
+      expect.objectContaining({
+        totals: expect.objectContaining({ totalRuns: 5 }),
+      })
+    );
   });
 });
