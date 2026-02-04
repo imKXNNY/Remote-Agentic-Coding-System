@@ -17,8 +17,10 @@ import { join } from 'path';
 import {
   buildWebhookDedupeKey,
   deriveWebhookDeliveryId,
+  evaluateAutonomousRetryPolicy,
+  WEBHOOK_RUN_REASONS,
 } from '../utils/webhook-control-plane';
-import { evaluateWebhookPolicy } from '../utils/webhook-policy';
+import { evaluateWebhookPolicy, WebhookRiskTier } from '../utils/webhook-policy';
 
 const execAsync = promisify(exec);
 
@@ -74,6 +76,7 @@ interface WebhookMetadata {
 interface WebhookProcessContext {
   runId: string;
   chainId: string;
+  riskTier: WebhookRiskTier;
   event: WebhookEvent;
   parsed: {
     owner: string;
@@ -692,6 +695,7 @@ ${triage.technical_summary}
       context: {
         runId: intake.run.id,
         chainId: intake.chain.id,
+        riskTier: intake.run.risk_tier ?? 'medium',
         event,
         parsed: {
           owner,
@@ -710,7 +714,7 @@ ${triage.technical_summary}
    * Process an accepted webhook asynchronously.
    */
   async processWebhook(context: WebhookProcessContext): Promise<void> {
-    const { runId, chainId, parsed } = context;
+    const { runId, chainId, riskTier, parsed } = context;
     const { owner, repo, number, comment, eventType, issue, pullRequest } = parsed;
     const conversationId = this.buildConversationId(owner, repo, number);
 
@@ -796,11 +800,26 @@ Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
     } catch (error) {
       console.error('[GitHub] Message handling error:', error);
       const message = error instanceof Error ? error.message : String(error);
-      const failure = await webhookDb.registerWebhookFailure(chainId, runId, message);
+      const retryPolicy = evaluateAutonomousRetryPolicy({
+        riskTier,
+        repeatedFailureCount: 1,
+      });
+      const failure = await webhookDb.registerWebhookFailure(
+        chainId,
+        runId,
+        message,
+        retryPolicy.maxAttempts
+      );
+      const retryDecision = evaluateAutonomousRetryPolicy({
+        riskTier,
+        repeatedFailureCount: failure.repeatedFailureCount,
+      });
       await webhookDb.finalizeWebhookRun(
         runId,
-        failure.shouldPause ? 'paused' : 'blocked_policy',
-        failure.shouldPause ? 'repeated_failure_signature' : 'processing_error'
+        retryDecision.shouldPause ? 'paused' : 'blocked_policy',
+        retryDecision.shouldPause
+          ? WEBHOOK_RUN_REASONS.RETRY_EXHAUSTED
+          : WEBHOOK_RUN_REASONS.RETRY_SCHEDULED
       );
       await this.sendMessage(conversationId, 'Warning: an error occurred. Please try again or use /reset.');
     }

@@ -111,10 +111,11 @@ describe('GitHubAdapter', () => {
   });
 
   describe('processWebhook', () => {
-    test('records and finalizes failure when preprocessing throws', async () => {
+    test('records and finalizes retry_scheduled when preprocessing throws and retries remain', async () => {
       webhookDb.registerWebhookFailure.mockResolvedValueOnce({
         shouldPause: false,
         failureSignature: 'sig-1',
+        repeatedFailureCount: 1,
       });
       jest.spyOn(adapter as any, 'getOrCreateCodebaseForRepo').mockRejectedValueOnce(new Error('setup failed'));
       jest.spyOn(adapter as any, 'sendMessage').mockResolvedValueOnce(undefined);
@@ -122,6 +123,7 @@ describe('GitHubAdapter', () => {
       await adapter.processWebhook({
         runId: 'run-1',
         chainId: 'chain-1',
+        riskTier: 'medium',
         event: {} as any,
         parsed: {
           owner: 'imKXNNY',
@@ -134,12 +136,46 @@ describe('GitHubAdapter', () => {
         },
       });
 
-      expect(webhookDb.registerWebhookFailure).toHaveBeenCalledWith('chain-1', 'run-1', 'setup failed');
+      expect(webhookDb.registerWebhookFailure).toHaveBeenCalledWith(
+        'chain-1',
+        'run-1',
+        'setup failed',
+        2
+      );
       expect(webhookDb.finalizeWebhookRun).toHaveBeenCalledWith(
         'run-1',
         'blocked_policy',
-        'processing_error'
+        'retry_scheduled'
       );
+      expect((adapter as any).sendMessage).toHaveBeenCalled();
+    });
+
+    test('finalizes retry_exhausted and pauses when retry budget is exhausted', async () => {
+      webhookDb.registerWebhookFailure.mockResolvedValueOnce({
+        shouldPause: true,
+        failureSignature: 'sig-2',
+        repeatedFailureCount: 1,
+      });
+      jest.spyOn(adapter as any, 'getOrCreateCodebaseForRepo').mockRejectedValueOnce(new Error('setup failed'));
+      jest.spyOn(adapter as any, 'sendMessage').mockResolvedValueOnce(undefined);
+
+      await adapter.processWebhook({
+        runId: 'run-2',
+        chainId: 'chain-2',
+        riskTier: 'high',
+        event: {} as any,
+        parsed: {
+          owner: 'imKXNNY',
+          repo: 'Remote-Agentic-Coding-System',
+          number: 31,
+          comment: '@remote-agent /status',
+          eventType: 'issue_comment',
+          issue: undefined,
+          pullRequest: undefined,
+        },
+      });
+
+      expect(webhookDb.finalizeWebhookRun).toHaveBeenCalledWith('run-2', 'paused', 'retry_exhausted');
       expect((adapter as any).sendMessage).toHaveBeenCalled();
     });
   });

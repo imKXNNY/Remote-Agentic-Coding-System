@@ -374,8 +374,9 @@ export async function finalizeWebhookRun(
 export async function registerWebhookFailure(
   chainId: string,
   runId: string,
-  errorMessage: string
-): Promise<{ shouldPause: boolean; failureSignature: string }> {
+  errorMessage: string,
+  maxFailuresBeforePause = 2
+): Promise<{ shouldPause: boolean; failureSignature: string; repeatedFailureCount: number }> {
   const signature = buildFailureSignature(errorMessage, 1, []);
   const client = await pool.connect();
 
@@ -395,14 +396,14 @@ export async function registerWebhookFailure(
                  WHEN last_failure_signature = $2 THEN repeated_failure_count + 1
                  ELSE 1
                END
-             ) >= 2
+             ) >= $3
                THEN 'paused'
              ELSE status
            END,
            updated_at = NOW()
        WHERE id = $1
        RETURNING repeated_failure_count`,
-      [chainId, signature]
+      [chainId, signature, maxFailuresBeforePause]
     );
 
     await client.query(
@@ -425,11 +426,12 @@ export async function registerWebhookFailure(
 
     await client.query('COMMIT');
 
-    const repeatCount = chainUpdate.rows[0]?.repeated_failure_count;
-    if (!repeatCount) {
-      return { shouldPause: false, failureSignature: signature };
-    }
-    return { shouldPause: repeatCount >= 2, failureSignature: signature };
+    const repeatCount = chainUpdate.rows[0]?.repeated_failure_count ?? 1;
+    return {
+      shouldPause: repeatCount >= maxFailuresBeforePause,
+      failureSignature: signature,
+      repeatedFailureCount: repeatCount,
+    };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
