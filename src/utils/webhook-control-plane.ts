@@ -14,9 +14,13 @@ export const WEBHOOK_RUN_REASONS = {
   RETRY_EXHAUSTED: 'retry_exhausted',
   COOLDOWN_ACTIVE: 'cooldown_active',
   BACKPRESSURE_ACTIVE: 'backpressure_active',
+  BUDGET_EXHAUSTED: 'budget_exhausted',
+  CIRCUIT_BREAKER_OPEN: 'circuit_breaker_open',
+  CIRCUIT_BREAKER_TRIPPED: 'circuit_breaker_tripped',
   ABORTED_GUARDRAIL: 'aborted_guardrail',
   SUCCEEDED: 'succeeded',
   APPROVAL_REQUIRED: 'approval_required',
+  MANUAL_OVERRIDE: 'manual_override',
 } as const;
 
 export type WebhookRunReasonCode =

@@ -158,4 +158,11 @@ describe('webhook control-plane utils', () => {
 
     expect(cooldownUntil.getTime() - now.getTime()).toBe((120 + jitterA) * 1000);
   });
+
+  test('reason code registry includes safety hardening reasons', () => {
+    expect(WEBHOOK_RUN_REASONS.BUDGET_EXHAUSTED).toBe('budget_exhausted');
+    expect(WEBHOOK_RUN_REASONS.CIRCUIT_BREAKER_OPEN).toBe('circuit_breaker_open');
+    expect(WEBHOOK_RUN_REASONS.CIRCUIT_BREAKER_TRIPPED).toBe('circuit_breaker_tripped');
+    expect(WEBHOOK_RUN_REASONS.MANUAL_OVERRIDE).toBe('manual_override');
+  });
 });

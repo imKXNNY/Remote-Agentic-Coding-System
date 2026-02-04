@@ -112,6 +112,11 @@ interface WebhookIntakeResult {
   context?: WebhookProcessContext;
 }
 
+interface ChainControlCommand {
+  chainId: string;
+  reason: string;
+}
+
 export class GitHubAdapter implements IPlatformAdapter {
   private octokit: Octokit;
   private webhookSecret: string;
@@ -290,6 +295,38 @@ export class GitHubAdapter implements IPlatformAdapter {
   private extractApproveRunId(comment: string): string | null {
     const match = /^approve-run\s+([a-zA-Z0-9-]+)/i.exec(comment.trim());
     return match?.[1] ?? null;
+  }
+
+  private extractPauseLoopCommand(comment: string): ChainControlCommand | null {
+    const match = /^pause-loop\s+([a-zA-Z0-9-]+)\s+(.+)/i.exec(comment.trim());
+    if (!match) {
+      return null;
+    }
+    return { chainId: match[1], reason: match[2].trim() };
+  }
+
+  private extractResumeLoopCommand(comment: string): ChainControlCommand | null {
+    const match = /^resume-loop\s+([a-zA-Z0-9-]+)\s+(.+)/i.exec(comment.trim());
+    if (!match) {
+      return null;
+    }
+    return { chainId: match[1], reason: match[2].trim() };
+  }
+
+  private extractOverrideCooldownCommand(comment: string): ChainControlCommand | null {
+    const match = /^override-cooldown\s+([a-zA-Z0-9-]+)\s+(.+)/i.exec(comment.trim());
+    if (!match) {
+      return null;
+    }
+    return { chainId: match[1], reason: match[2].trim() };
+  }
+
+  private extractOverrideCircuitBreakerReason(comment: string): string | null {
+    const match = /^override-circuit-breaker\s+(.+)/i.exec(comment.trim());
+    if (!match) {
+      return null;
+    }
+    return match[1].trim();
   }
 
   private async isMaintainer(owner: string, repo: string, username: string): Promise<boolean> {
@@ -607,6 +644,133 @@ ${triage.technical_summary}
       };
     }
 
+    const pauseLoopCommand = this.extractPauseLoopCommand(strippedComment);
+    const resumeLoopCommand = this.extractResumeLoopCommand(strippedComment);
+    const overrideCooldownCommand = this.extractOverrideCooldownCommand(strippedComment);
+    const overrideCircuitBreakerReason = this.extractOverrideCircuitBreakerReason(strippedComment);
+    if (
+      pauseLoopCommand ||
+      resumeLoopCommand ||
+      overrideCooldownCommand ||
+      overrideCircuitBreakerReason
+    ) {
+      const actor = event.sender?.login;
+      if (!actor) {
+        return {
+          httpStatus: 400,
+          body: { status: 'control_denied', reason: 'missing_actor' },
+          shouldProcess: false,
+        };
+      }
+      const canControl = await this.isMaintainer(owner, repo, actor);
+      if (!canControl) {
+        return {
+          httpStatus: 403,
+          body: { status: 'control_denied', reason: 'maintainer_required' },
+          shouldProcess: false,
+        };
+      }
+
+      if (pauseLoopCommand) {
+        const pausedChain = await webhookDb.pauseWebhookChain(
+          pauseLoopCommand.chainId,
+          event.repository.full_name,
+          actor,
+          pauseLoopCommand.reason
+        );
+        if (!pausedChain) {
+          return {
+            httpStatus: 404,
+            body: { status: 'control_not_found', action: 'pause_loop', chainId: pauseLoopCommand.chainId },
+            shouldProcess: false,
+          };
+        }
+        return {
+          httpStatus: 200,
+          body: {
+            status: 'control_applied',
+            action: 'pause_loop',
+            chainId: pausedChain.id,
+            actor,
+          },
+          shouldProcess: false,
+        };
+      }
+
+      if (resumeLoopCommand) {
+        const resumedChain = await webhookDb.resumeWebhookChain(
+          resumeLoopCommand.chainId,
+          event.repository.full_name,
+          actor,
+          resumeLoopCommand.reason
+        );
+        if (!resumedChain) {
+          return {
+            httpStatus: 404,
+            body: { status: 'control_not_found', action: 'resume_loop', chainId: resumeLoopCommand.chainId },
+            shouldProcess: false,
+          };
+        }
+        return {
+          httpStatus: 200,
+          body: {
+            status: 'control_applied',
+            action: 'resume_loop',
+            chainId: resumedChain.id,
+            actor,
+          },
+          shouldProcess: false,
+        };
+      }
+
+      if (overrideCooldownCommand) {
+        const cooldownOverrideChain = await webhookDb.overrideWebhookChainCooldown(
+          overrideCooldownCommand.chainId,
+          event.repository.full_name,
+          actor,
+          overrideCooldownCommand.reason
+        );
+        if (!cooldownOverrideChain) {
+          return {
+            httpStatus: 404,
+            body: {
+              status: 'control_not_found',
+              action: 'override_cooldown',
+              chainId: overrideCooldownCommand.chainId,
+            },
+            shouldProcess: false,
+          };
+        }
+        return {
+          httpStatus: 200,
+          body: {
+            status: 'control_applied',
+            action: 'override_cooldown',
+            chainId: cooldownOverrideChain.id,
+            actor,
+          },
+          shouldProcess: false,
+        };
+      }
+
+      const breaker = await webhookDb.overrideRepositoryCircuitBreaker(
+        event.repository.full_name,
+        actor,
+        overrideCircuitBreakerReason ?? 'manual_override'
+      );
+      return {
+        httpStatus: 200,
+        body: {
+          status: 'control_applied',
+          action: 'override_circuit_breaker',
+          repository: event.repository.full_name,
+          circuitBreakerStatus: breaker?.status ?? 'closed',
+          actor,
+        },
+        shouldProcess: false,
+      };
+    }
+
     const isMutating = strippedComment.startsWith('/command-invoke');
     const targetBranch = pullRequest?.ref ?? event.repository.default_branch;
     const policy = evaluateWebhookPolicy({
@@ -857,6 +1021,9 @@ Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
             },
           });
         } else {
+          const exhaustedReason = failure.circuitBreakerTripped
+            ? WEBHOOK_RUN_REASONS.CIRCUIT_BREAKER_TRIPPED
+            : retryDecision.reason;
           await webhookDb.addWebhookRunEvent({
             runId,
             chainId,
@@ -864,22 +1031,26 @@ Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
             status: 'paused',
             message: `Retry budget exhausted after ${String(failure.repeatedFailureCount)} failures.`,
             metadata: {
-              reason: retryDecision.reason,
+              reason: exhaustedReason,
               riskTier,
               repeatedFailureCount: failure.repeatedFailureCount,
               maxAttempts: retryDecision.maxAttempts,
+              circuitBreakerTripped: failure.circuitBreakerTripped,
             },
           });
         }
       } catch (controlPlaneError) {
         console.warn('[GitHub] Failed to update retry control-plane metadata:', controlPlaneError);
       }
+      const finalReason = failure.circuitBreakerTripped
+        ? WEBHOOK_RUN_REASONS.CIRCUIT_BREAKER_TRIPPED
+        : retryDecision.shouldPause
+          ? WEBHOOK_RUN_REASONS.RETRY_EXHAUSTED
+          : WEBHOOK_RUN_REASONS.RETRY_SCHEDULED;
       await webhookDb.finalizeWebhookRun(
         runId,
-        retryDecision.shouldPause ? 'paused' : 'blocked_policy',
-        retryDecision.shouldPause
-          ? WEBHOOK_RUN_REASONS.RETRY_EXHAUSTED
-          : WEBHOOK_RUN_REASONS.RETRY_SCHEDULED
+        retryDecision.shouldPause || failure.circuitBreakerTripped ? 'paused' : 'blocked_policy',
+        finalReason
       );
       await this.sendMessage(conversationId, 'Warning: an error occurred. Please try again or use /reset.');
     }
