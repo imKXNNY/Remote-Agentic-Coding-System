@@ -428,7 +428,12 @@ describe('GitHubAdapter', () => {
 
       expect(result.httpStatus).toBe(200);
       expect(result.body).toEqual(expect.objectContaining({ status: 'control_applied', action: 'pause_loop' }));
-      expect(webhookDb.pauseWebhookChain).toHaveBeenCalledWith('chain-1', 'maintainer', 'too-many-failures');
+      expect(webhookDb.pauseWebhookChain).toHaveBeenCalledWith(
+        'chain-1',
+        'imKXNNY/Remote-Agentic-Coding-System',
+        'maintainer',
+        'too-many-failures'
+      );
     });
 
     test('override-circuit-breaker command succeeds for maintainer', async () => {

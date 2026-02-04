@@ -674,6 +674,7 @@ ${triage.technical_summary}
       if (pauseLoopCommand) {
         const pausedChain = await webhookDb.pauseWebhookChain(
           pauseLoopCommand.chainId,
+          event.repository.full_name,
           actor,
           pauseLoopCommand.reason
         );
@@ -699,6 +700,7 @@ ${triage.technical_summary}
       if (resumeLoopCommand) {
         const resumedChain = await webhookDb.resumeWebhookChain(
           resumeLoopCommand.chainId,
+          event.repository.full_name,
           actor,
           resumeLoopCommand.reason
         );
@@ -724,6 +726,7 @@ ${triage.technical_summary}
       if (overrideCooldownCommand) {
         const cooldownOverrideChain = await webhookDb.overrideWebhookChainCooldown(
           overrideCooldownCommand.chainId,
+          event.repository.full_name,
           actor,
           overrideCooldownCommand.reason
         );

@@ -43,7 +43,7 @@ For each `conversationId` and root event chain:
 ### 3) Cool-down window
 After each mutating run (commit/push/PR update), enforce cooldown:
 - default 10 minutes per conversation chain
-- bypass only with explicit human command (`@remote-agent override-cooldown` by authorized maintainer).
+- bypass only with explicit human command (`@remote-agent override-cooldown <chain-id> <reason>` by authorized maintainer).
 
 ### 4) Stop conditions
 - Same failure signature repeats twice without net diff.
@@ -101,10 +101,12 @@ Authorized maintainer: a repository maintainer with write/admin permissions who 
 
 ### Control commands (issue/PR comments by maintainers)
 - `@remote-agent approve-run <run-id>`
-- `@remote-agent pause-loop <chain-id>`
-- `@remote-agent resume-loop <chain-id>`
-- `@remote-agent override-cooldown <chain-id>`
+- `@remote-agent pause-loop <chain-id> <reason>`
+- `@remote-agent resume-loop <chain-id> <reason>`
+- `@remote-agent override-cooldown <chain-id> <reason>`
+- `@remote-agent override-circuit-breaker <reason>` (repository scoped)
 - `@remote-agent disable-auto <scope>` where scope is one of: `repo`, `issue`, `pr`
+- Override actions are auditable and record `actor`, `reason`, `action`, and scope metadata.
 
 ## Observability and Traceability
 

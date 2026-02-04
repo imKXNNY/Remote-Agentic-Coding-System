@@ -760,6 +760,7 @@ export async function approveWebhookRun(runId: string, approvedBy: string): Prom
 
 export async function pauseWebhookChain(
   chainId: string,
+  repositoryFullName: string,
   actor: string,
   reason: string
 ): Promise<WebhookChain | null> {
@@ -768,8 +769,9 @@ export async function pauseWebhookChain(
      SET status = 'paused',
          updated_at = NOW()
      WHERE id = $1
+       AND repository_full_name = $2
      RETURNING *`,
-    [chainId]
+    [chainId, repositoryFullName]
   );
   const chain = result.rows.length > 0 ? result.rows[0] : null;
   if (chain) {
@@ -789,6 +791,7 @@ export async function pauseWebhookChain(
 
 export async function resumeWebhookChain(
   chainId: string,
+  repositoryFullName: string,
   actor: string,
   reason: string
 ): Promise<WebhookChain | null> {
@@ -797,8 +800,9 @@ export async function resumeWebhookChain(
      SET status = 'active',
          updated_at = NOW()
      WHERE id = $1
+       AND repository_full_name = $2
      RETURNING *`,
-    [chainId]
+    [chainId, repositoryFullName]
   );
   const chain = result.rows.length > 0 ? result.rows[0] : null;
   if (chain) {
@@ -828,6 +832,7 @@ export async function setWebhookChainCooldown(chainId: string, cooldownUntil: Da
 
 export async function overrideWebhookChainCooldown(
   chainId: string,
+  repositoryFullName: string,
   actor: string,
   reason: string
 ): Promise<WebhookChain | null> {
@@ -836,8 +841,9 @@ export async function overrideWebhookChainCooldown(
      SET cooldown_until = NOW(),
          updated_at = NOW()
      WHERE id = $1
+       AND repository_full_name = $2
      RETURNING *`,
-    [chainId]
+    [chainId, repositoryFullName]
   );
   const chain = result.rows.length > 0 ? result.rows[0] : null;
   if (chain) {
