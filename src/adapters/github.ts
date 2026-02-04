@@ -18,6 +18,7 @@ import {
   buildWebhookDedupeKey,
   deriveWebhookDeliveryId,
 } from '../utils/webhook-control-plane';
+import { evaluateWebhookPolicy } from '../utils/webhook-policy';
 
 const execAsync = promisify(exec);
 
@@ -38,6 +39,7 @@ interface WebhookEvent {
     user: { login: string };
     state: string;
     head?: { sha: string };
+    ref?: string;
     changed_files?: number;
     additions?: number;
     deletions?: number;
@@ -264,6 +266,30 @@ export class GitHubAdapter implements IPlatformAdapter {
     const match = regex.exec(conversationId);
     if (!match) return null;
     return { owner: match[1], repo: match[2], number: parseInt(match[3], 10) };
+  }
+
+  private extractApproveRunId(comment: string): string | null {
+    const match = /^approve-run\s+([a-zA-Z0-9-]+)/i.exec(comment.trim());
+    return match?.[1] ?? null;
+  }
+
+  private async isMaintainer(owner: string, repo: string, username: string): Promise<boolean> {
+    try {
+      const { data } = await this.octokit.rest.repos.getCollaboratorPermissionLevel({
+        owner,
+        repo,
+        username,
+      });
+      return ['admin', 'maintain', 'write'].includes(data.permission);
+    } catch (error) {
+      console.warn('[GitHub] Failed to resolve maintainer permission', {
+        owner,
+        repo,
+        username,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return false;
+    }
   }
 
   /**
@@ -521,7 +547,55 @@ ${triage.technical_summary}
     });
 
     const strippedComment = this.stripMention(comment);
+    const approveRunId = this.extractApproveRunId(strippedComment);
+    if (approveRunId) {
+      const actor = event.sender?.login;
+      if (!actor) {
+        return {
+          httpStatus: 400,
+          body: { status: 'approval_denied', reason: 'missing_actor' },
+          shouldProcess: false,
+        };
+      }
+
+      const canApprove = await this.isMaintainer(owner, repo, actor);
+      if (!canApprove) {
+        return {
+          httpStatus: 403,
+          body: { status: 'approval_denied', reason: 'maintainer_required', runId: approveRunId },
+          shouldProcess: false,
+        };
+      }
+
+      const approvedRun = await webhookDb.approveWebhookRun(approveRunId, actor);
+      if (!approvedRun) {
+        return {
+          httpStatus: 404,
+          body: { status: 'approval_not_found', runId: approveRunId },
+          shouldProcess: false,
+        };
+      }
+
+      return {
+        httpStatus: 200,
+        body: {
+          status: 'approval_granted',
+          runId: approvedRun.id,
+          chainId: approvedRun.chain_id,
+          approvedBy: actor,
+        },
+        shouldProcess: false,
+      };
+    }
+
     const isMutating = strippedComment.startsWith('/command-invoke');
+    const targetBranch = pullRequest?.ref ?? event.repository.default_branch;
+    const policy = evaluateWebhookPolicy({
+      repositoryFullName: event.repository.full_name,
+      targetBranch,
+      commandText: strippedComment,
+      isMutating,
+    });
 
     const intake = await webhookDb.intakeWebhookRun({
       platformType: 'github',
@@ -535,6 +609,9 @@ ${triage.technical_summary}
       action: event.action,
       headSha,
       isMutating,
+      policyDecision: policy.decision,
+      policyReason: policy.reason,
+      riskTier: policy.riskTier,
     });
 
     if (intake.decision === 'deduped') {
@@ -563,6 +640,8 @@ ${triage.technical_summary}
         body: {
           status: 'paused',
           reason: intake.run?.reason ?? intake.reason ?? 'guardrail_triggered',
+          riskTier: intake.run?.risk_tier ?? null,
+          policyDecision: intake.run?.policy_decision ?? null,
           chainId: intake.chain.id,
           runId: intake.run?.id ?? null,
         },
@@ -570,9 +649,45 @@ ${triage.technical_summary}
       };
     }
 
+    if (intake.decision === 'blocked') {
+      return {
+        httpStatus: 202,
+        body: {
+          status: 'blocked_policy',
+          reason: intake.reason ?? intake.run.reason ?? 'policy_blocked',
+          riskTier: intake.run.risk_tier,
+          policyDecision: intake.run.policy_decision,
+          chainId: intake.chain.id,
+          runId: intake.run.id,
+        },
+        shouldProcess: false,
+      };
+    }
+
+    if (intake.decision === 'requires_approval') {
+      return {
+        httpStatus: 202,
+        body: {
+          status: 'requires_approval',
+          reason: intake.reason ?? intake.run.reason ?? 'approval_required',
+          riskTier: intake.run.risk_tier,
+          policyDecision: intake.run.policy_decision,
+          chainId: intake.chain.id,
+          runId: intake.run.id,
+        },
+        shouldProcess: false,
+      };
+    }
+
     return {
       httpStatus: 202,
-      body: { status: 'accepted', chainId: intake.chain.id, runId: intake.run.id },
+      body: {
+        status: 'accepted',
+        chainId: intake.chain.id,
+        runId: intake.run.id,
+        riskTier: intake.run.risk_tier,
+        policyDecision: intake.run.policy_decision,
+      },
       shouldProcess: true,
       context: {
         runId: intake.run.id,

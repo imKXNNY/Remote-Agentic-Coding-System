@@ -6,7 +6,10 @@ jest.mock('@octokit/rest', () => ({
   Octokit: jest.fn().mockImplementation(() => ({
     rest: {
       issues: { createComment: jest.fn() },
-      repos: { get: jest.fn().mockResolvedValue({ data: { default_branch: 'main' } }) }
+      repos: {
+        get: jest.fn().mockResolvedValue({ data: { default_branch: 'main' } }),
+        getCollaboratorPermissionLevel: jest.fn().mockResolvedValue({ data: { permission: 'write' } }),
+      }
     }
   }))
 }));
@@ -39,6 +42,7 @@ jest.mock('../db/webhook-control-plane', () => ({
   intakeWebhookRun: jest.fn(),
   finalizeWebhookRun: jest.fn(),
   registerWebhookFailure: jest.fn(),
+  approveWebhookRun: jest.fn(),
 }));
 jest.mock('../orchestrator/orchestrator', () => ({
   handleMessage: jest.fn()
@@ -50,6 +54,7 @@ describe('GitHubAdapter', () => {
     intakeWebhookRun: jest.Mock;
     finalizeWebhookRun: jest.Mock;
     registerWebhookFailure: jest.Mock;
+    approveWebhookRun: jest.Mock;
   };
 
   beforeEach(() => {
@@ -140,6 +145,123 @@ describe('GitHubAdapter', () => {
   });
 
   describe('ingestWebhook', () => {
+    test('returns requires_approval for high-risk policy decisions', async () => {
+      webhookDb.intakeWebhookRun.mockResolvedValueOnce({
+        decision: 'requires_approval',
+        chain: { id: 'chain-approval' },
+        run: { id: 'run-approval', reason: 'high_risk_requires_approval', risk_tier: 'high', policy_decision: 'requires_approval' },
+      });
+
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: { body: '@remote-agent /command-invoke auth migration change', user: { login: 'u' } },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'u' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.shouldProcess).toBe(false);
+      expect(result.body).toEqual(
+        expect.objectContaining({
+          status: 'requires_approval',
+          runId: 'run-approval',
+          riskTier: 'high',
+        })
+      );
+    });
+
+    test('returns blocked policy when protected path appears', async () => {
+      webhookDb.intakeWebhookRun.mockResolvedValueOnce({
+        decision: 'blocked',
+        chain: { id: 'chain-blocked' },
+        run: { id: 'run-blocked', reason: 'protected_path_blocked', risk_tier: 'medium', policy_decision: 'blocked' },
+      });
+
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: { body: '@remote-agent /command-invoke edit .env', user: { login: 'u' } },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'u' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.shouldProcess).toBe(false);
+      expect(result.body).toEqual(
+        expect.objectContaining({
+          status: 'blocked_policy',
+          runId: 'run-blocked',
+        })
+      );
+    });
+
+    test('approve-run command succeeds for maintainer', async () => {
+      webhookDb.approveWebhookRun.mockResolvedValueOnce({ id: 'run-1', chain_id: 'chain-1' });
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: { body: '@remote-agent approve-run run-1', user: { login: 'u' } },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'maintainer' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.httpStatus).toBe(200);
+      expect(result.body).toEqual(expect.objectContaining({ status: 'approval_granted', runId: 'run-1' }));
+      expect(webhookDb.approveWebhookRun).toHaveBeenCalledWith('run-1', 'maintainer');
+    });
+
+    test('approve-run command fails for non-maintainer', async () => {
+      const octokit = (adapter as any).octokit;
+      octokit.rest.repos.getCollaboratorPermissionLevel.mockResolvedValueOnce({ data: { permission: 'read' } });
+
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: { body: '@remote-agent approve-run run-2', user: { login: 'u' } },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'reader' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.httpStatus).toBe(403);
+      expect(result.body).toEqual(expect.objectContaining({ status: 'approval_denied' }));
+      expect(webhookDb.approveWebhookRun).not.toHaveBeenCalled();
+    });
+
     test('returns deduped intake result for duplicate delivery', async () => {
       webhookDb.intakeWebhookRun.mockResolvedValueOnce({
         decision: 'deduped',
