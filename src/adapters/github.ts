@@ -371,15 +371,16 @@ export class GitHubAdapter implements IPlatformAdapter {
       return null;
     }
 
-    const lower = trimmed.toLowerCase();
-    const dryRun = lower.includes('--dry-run');
-    const overrideMatch = /\s--override\s+(.+)$/i.exec(trimmed);
-    const overrideReason = overrideMatch?.[1]?.trim();
+    const loweredTokens = tokens.map(token => token.toLowerCase());
+    const dryRun = loweredTokens.includes('--dry-run');
+    const overrideIndex = loweredTokens.indexOf('--override');
+    const overrideReason =
+      overrideIndex >= 0 ? tokens.slice(overrideIndex + 1).join(' ').trim() || undefined : undefined;
 
     return {
       pullNumber,
       dryRun,
-      overrideReason: overrideReason || undefined,
+      overrideReason,
     };
   }
 

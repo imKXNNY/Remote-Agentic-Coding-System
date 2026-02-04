@@ -557,6 +557,38 @@ describe('GitHubAdapter', () => {
       );
     });
 
+    test('auto-merge parser avoids dry-run false positives in override reason', async () => {
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: {
+          body: '@remote-agent auto-merge 31 --override manual-note-with---dry-run-text',
+          user: { login: 'u' },
+        },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'maintainer' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.httpStatus).toBe(200);
+      expect(result.body).toEqual(
+        expect.objectContaining({
+          status: 'auto_merged',
+          action: 'auto_merge',
+          overrideApplied: false,
+        })
+      );
+      expect(webhookDb.recordRepositoryAutomationOverride).not.toHaveBeenCalled();
+    });
+
     test('merge-gate fetches additional pages for checks and reviews', async () => {
       const octokit = (adapter as any).octokit;
       octokit.rest.checks.listForRef
