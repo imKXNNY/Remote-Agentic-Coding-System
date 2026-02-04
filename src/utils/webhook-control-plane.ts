@@ -13,6 +13,7 @@ export const WEBHOOK_RUN_REASONS = {
   RETRY_SCHEDULED: 'retry_scheduled',
   RETRY_EXHAUSTED: 'retry_exhausted',
   COOLDOWN_ACTIVE: 'cooldown_active',
+  BACKPRESSURE_ACTIVE: 'backpressure_active',
   ABORTED_GUARDRAIL: 'aborted_guardrail',
   SUCCEEDED: 'succeeded',
   APPROVAL_REQUIRED: 'approval_required',
@@ -56,6 +57,13 @@ export interface AutonomousRetryPolicyDecision {
   shouldPause: boolean;
   maxAttempts: number;
   reason: 'retry_scheduled' | 'retry_exhausted';
+}
+
+interface RetryCooldownInput {
+  now: Date;
+  baseSeconds: number;
+  maxJitterSeconds: number;
+  seed: string;
 }
 
 export function isTerminalWebhookRunStatus(status: WebhookRunStatus): boolean {
@@ -147,6 +155,26 @@ export function evaluateAutonomousRetryPolicy(
     maxAttempts,
     reason: 'retry_scheduled',
   };
+}
+
+export function computeDeterministicJitterSeconds(seed: string, maxJitterSeconds: number): number {
+  const safeMax = Math.max(maxJitterSeconds, 0);
+  if (safeMax === 0) {
+    return 0;
+  }
+
+  const hex = createHash('sha256').update(seed).digest('hex').slice(0, 8);
+  const value = Number.parseInt(hex, 16);
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return value % (safeMax + 1);
+}
+
+export function computeRetryCooldownUntil(input: RetryCooldownInput): Date {
+  const jitterSeconds = computeDeterministicJitterSeconds(input.seed, input.maxJitterSeconds);
+  const totalSeconds = Math.max(input.baseSeconds, 0) + jitterSeconds;
+  return new Date(input.now.getTime() + totalSeconds * 1000);
 }
 
 export function buildFailureSignature(errorMessage: string, exitCode: number, failingTests: string[]): string {

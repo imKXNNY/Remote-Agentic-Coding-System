@@ -42,6 +42,8 @@ jest.mock('../db/webhook-control-plane', () => ({
   intakeWebhookRun: jest.fn(),
   finalizeWebhookRun: jest.fn(),
   registerWebhookFailure: jest.fn(),
+  setWebhookChainCooldown: jest.fn(),
+  addWebhookRunEvent: jest.fn(),
   approveWebhookRun: jest.fn(),
 }));
 jest.mock('../orchestrator/orchestrator', () => ({
@@ -54,6 +56,8 @@ describe('GitHubAdapter', () => {
     intakeWebhookRun: jest.Mock;
     finalizeWebhookRun: jest.Mock;
     registerWebhookFailure: jest.Mock;
+    setWebhookChainCooldown: jest.Mock;
+    addWebhookRunEvent: jest.Mock;
     approveWebhookRun: jest.Mock;
   };
 
@@ -147,6 +151,15 @@ describe('GitHubAdapter', () => {
         'blocked_policy',
         'retry_scheduled'
       );
+      expect(webhookDb.setWebhookChainCooldown).toHaveBeenCalledWith('chain-1', expect.any(Date));
+      expect(webhookDb.addWebhookRunEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: 'run-1',
+          chainId: 'chain-1',
+          eventType: 'retry_scheduled',
+          status: 'blocked_policy',
+        })
+      );
       expect((adapter as any).sendMessage).toHaveBeenCalled();
     });
 
@@ -176,6 +189,15 @@ describe('GitHubAdapter', () => {
       });
 
       expect(webhookDb.finalizeWebhookRun).toHaveBeenCalledWith('run-2', 'paused', 'retry_exhausted');
+      expect(webhookDb.setWebhookChainCooldown).not.toHaveBeenCalled();
+      expect(webhookDb.addWebhookRunEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: 'run-2',
+          chainId: 'chain-2',
+          eventType: 'retry_exhausted',
+          status: 'paused',
+        })
+      );
       expect((adapter as any).sendMessage).toHaveBeenCalled();
     });
   });

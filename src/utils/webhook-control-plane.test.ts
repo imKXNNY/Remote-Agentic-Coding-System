@@ -1,6 +1,8 @@
 import {
   buildFailureSignature,
   buildWebhookDedupeKey,
+  computeDeterministicJitterSeconds,
+  computeRetryCooldownUntil,
   deriveWebhookDeliveryId,
   evaluateAutonomousRetryPolicy,
   evaluateWebhookGuardrails,
@@ -136,5 +138,24 @@ describe('webhook control-plane utils', () => {
     } else {
       delete process.env.WEBHOOK_MAX_RETRIES_MEDIUM_RISK;
     }
+  });
+
+  test('computeRetryCooldownUntil applies deterministic jitter', () => {
+    const now = new Date('2026-02-04T00:00:00.000Z');
+    const jitterA = computeDeterministicJitterSeconds('chain-1:run-1:1', 30);
+    const jitterB = computeDeterministicJitterSeconds('chain-1:run-1:1', 30);
+
+    expect(jitterA).toBe(jitterB);
+    expect(jitterA).toBeGreaterThanOrEqual(0);
+    expect(jitterA).toBeLessThanOrEqual(30);
+
+    const cooldownUntil = computeRetryCooldownUntil({
+      now,
+      baseSeconds: 120,
+      maxJitterSeconds: 30,
+      seed: 'chain-1:run-1:1',
+    });
+
+    expect(cooldownUntil.getTime() - now.getTime()).toBe((120 + jitterA) * 1000);
   });
 });

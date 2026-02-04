@@ -1,5 +1,6 @@
 import { pool } from './connection';
 import {
+  WEBHOOK_RUN_REASONS,
   WebhookRunStatus,
   buildFailureSignature,
   evaluateWebhookGuardrails,
@@ -110,6 +111,7 @@ function parseEnvInt(name: string, fallback: number): number {
 const MAX_ITERATIONS_PER_CHAIN = parseEnvInt('WEBHOOK_MAX_ITERATIONS_PER_CHAIN', 3);
 const MAX_MUTATING_RUNS_24H = parseEnvInt('WEBHOOK_MAX_MUTATING_RUNS_24H', 5);
 const COOLDOWN_MINUTES = parseEnvInt('WEBHOOK_MUTATION_COOLDOWN_MINUTES', 10);
+const MAX_INFLIGHT_RUNS = parseEnvInt('WEBHOOK_MAX_INFLIGHT_RUNS', 20);
 
 export async function intakeWebhookRun(input: IntakeWebhookRunInput): Promise<IntakeDecision> {
   const client = await pool.connect();
@@ -275,6 +277,49 @@ export async function intakeWebhookRun(input: IntakeWebhookRunInput): Promise<In
         run: approvalRun,
         chain: chainAfterWindowReset,
         reason: input.policyReason,
+      };
+    }
+
+    const inflightRunsResult = await client.query<{ count: string }>(
+      `SELECT COUNT(*)::text AS count
+       FROM remote_agent_automation_runs
+       WHERE status = 'accepted'
+         AND finished_at IS NULL`
+    );
+    const inflightRuns = Number.parseInt(inflightRunsResult.rows[0]?.count ?? '0', 10);
+    if (inflightRuns >= MAX_INFLIGHT_RUNS) {
+      const pausedBackpressureRun = await insertRun(client, {
+        chainId: chainAfterWindowReset.id,
+        deliveryId: input.deliveryId,
+        dedupeKey: input.dedupeKey,
+        eventType: input.eventType,
+        action: input.action,
+        headSha: input.headSha ?? null,
+        status: 'paused',
+        reason: WEBHOOK_RUN_REASONS.BACKPRESSURE_ACTIVE,
+        isMutating: input.isMutating,
+        riskTier: input.riskTier,
+        policyDecision: input.policyDecision,
+        policyReason: input.policyReason,
+      });
+      if (!pausedBackpressureRun) {
+        const replay = await findExistingDedupeRun(client, input.dedupeKey);
+        if (replay) {
+          await client.query('COMMIT');
+          return {
+            decision: isTerminalWebhookRunStatus(replay.status) ? 'deduped' : 'replay_inflight',
+            run: replay,
+            chain: chainAfterWindowReset,
+          };
+        }
+        throw new Error('Failed to insert backpressure webhook run and no existing dedupe run found');
+      }
+      await client.query('COMMIT');
+      return {
+        decision: 'paused',
+        run: pausedBackpressureRun,
+        chain: chainAfterWindowReset,
+        reason: WEBHOOK_RUN_REASONS.BACKPRESSURE_ACTIVE,
       };
     }
 
@@ -561,6 +606,34 @@ export async function approveWebhookRun(runId: string, approvedBy: string): Prom
     });
   }
   return approvedRun;
+}
+
+export async function setWebhookChainCooldown(chainId: string, cooldownUntil: Date): Promise<void> {
+  await pool.query(
+    `UPDATE remote_agent_automation_chains
+     SET cooldown_until = $2,
+         updated_at = NOW()
+     WHERE id = $1`,
+    [chainId, cooldownUntil]
+  );
+}
+
+export async function addWebhookRunEvent(input: {
+  runId: string;
+  chainId: string;
+  eventType: string;
+  status?: string | null;
+  message?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  await safeEmitRunEvent(pool, {
+    runId: input.runId,
+    chainId: input.chainId,
+    eventType: input.eventType,
+    status: input.status ?? null,
+    message: input.message ?? null,
+    metadata: input.metadata ?? {},
+  });
 }
 
 interface Queryable {

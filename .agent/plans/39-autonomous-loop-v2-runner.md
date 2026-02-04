@@ -42,14 +42,14 @@ Implement a deterministic autonomous remediation runner on top of existing webho
 3. On retry exhaustion, finalize with a terminal non-retry reason and pause/abort semantics.
 
 ### Slice 3 - Cooldown and backpressure integration
-1. Add jittered cooldown windows on retry scheduling (bounded min/max).
-2. Respect existing chain cooldown checks and record reason `cooldown_active` when blocked.
-3. Add lightweight backpressure gate (queue/load threshold config) with deterministic response and reason code.
+1. [x] Add jittered cooldown windows on retry scheduling (bounded min/max).
+2. [x] Respect existing chain cooldown checks and record reason `cooldown_active` when blocked.
+3. [x] Add lightweight backpressure gate (queue/load threshold config) with deterministic response and reason code.
 
 ### Slice 4 - Adapter orchestration integration
-1. Wire state machine decisions into `GitHubAdapter.processWebhook` failure path.
-2. Ensure replay/in-flight idempotency behavior stays deterministic.
-3. Emit lifecycle events for schedule-retry / retry-skipped / retry-exhausted.
+1. [x] Wire state machine decisions into `GitHubAdapter.processWebhook` failure path.
+2. [x] Ensure replay/in-flight idempotency behavior stays deterministic.
+3. [x] Emit lifecycle events for schedule-retry / retry-skipped / retry-exhausted.
 
 ### Slice 5 - Tests + docs
 1. Add/extend tests for:
