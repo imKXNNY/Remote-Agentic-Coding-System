@@ -42,6 +42,8 @@ jest.mock('../db/webhook-control-plane', () => ({
   intakeWebhookRun: jest.fn(),
   finalizeWebhookRun: jest.fn(),
   registerWebhookFailure: jest.fn(),
+  setWebhookChainCooldown: jest.fn(),
+  addWebhookRunEvent: jest.fn(),
   approveWebhookRun: jest.fn(),
 }));
 jest.mock('../orchestrator/orchestrator', () => ({
@@ -54,6 +56,8 @@ describe('GitHubAdapter', () => {
     intakeWebhookRun: jest.Mock;
     finalizeWebhookRun: jest.Mock;
     registerWebhookFailure: jest.Mock;
+    setWebhookChainCooldown: jest.Mock;
+    addWebhookRunEvent: jest.Mock;
     approveWebhookRun: jest.Mock;
   };
 
@@ -111,10 +115,11 @@ describe('GitHubAdapter', () => {
   });
 
   describe('processWebhook', () => {
-    test('records and finalizes failure when preprocessing throws', async () => {
+    test('records and finalizes retry_scheduled when preprocessing throws and retries remain', async () => {
       webhookDb.registerWebhookFailure.mockResolvedValueOnce({
         shouldPause: false,
         failureSignature: 'sig-1',
+        repeatedFailureCount: 1,
       });
       jest.spyOn(adapter as any, 'getOrCreateCodebaseForRepo').mockRejectedValueOnce(new Error('setup failed'));
       jest.spyOn(adapter as any, 'sendMessage').mockResolvedValueOnce(undefined);
@@ -122,6 +127,7 @@ describe('GitHubAdapter', () => {
       await adapter.processWebhook({
         runId: 'run-1',
         chainId: 'chain-1',
+        riskTier: 'medium',
         event: {} as any,
         parsed: {
           owner: 'imKXNNY',
@@ -134,11 +140,63 @@ describe('GitHubAdapter', () => {
         },
       });
 
-      expect(webhookDb.registerWebhookFailure).toHaveBeenCalledWith('chain-1', 'run-1', 'setup failed');
+      expect(webhookDb.registerWebhookFailure).toHaveBeenCalledWith(
+        'chain-1',
+        'run-1',
+        'setup failed',
+        2
+      );
       expect(webhookDb.finalizeWebhookRun).toHaveBeenCalledWith(
         'run-1',
         'blocked_policy',
-        'processing_error'
+        'retry_scheduled'
+      );
+      expect(webhookDb.setWebhookChainCooldown).toHaveBeenCalledWith('chain-1', expect.any(Date));
+      expect(webhookDb.addWebhookRunEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: 'run-1',
+          chainId: 'chain-1',
+          eventType: 'retry_scheduled',
+          status: 'blocked_policy',
+        })
+      );
+      expect((adapter as any).sendMessage).toHaveBeenCalled();
+    });
+
+    test('finalizes retry_exhausted and pauses when retry budget is exhausted', async () => {
+      webhookDb.registerWebhookFailure.mockResolvedValueOnce({
+        shouldPause: true,
+        failureSignature: 'sig-2',
+        repeatedFailureCount: 1,
+      });
+      jest.spyOn(adapter as any, 'getOrCreateCodebaseForRepo').mockRejectedValueOnce(new Error('setup failed'));
+      jest.spyOn(adapter as any, 'sendMessage').mockResolvedValueOnce(undefined);
+
+      await adapter.processWebhook({
+        runId: 'run-2',
+        chainId: 'chain-2',
+        riskTier: 'high',
+        event: {} as any,
+        parsed: {
+          owner: 'imKXNNY',
+          repo: 'Remote-Agentic-Coding-System',
+          number: 31,
+          comment: '@remote-agent /status',
+          eventType: 'issue_comment',
+          issue: undefined,
+          pullRequest: undefined,
+        },
+      });
+
+      expect(webhookDb.finalizeWebhookRun).toHaveBeenCalledWith('run-2', 'paused', 'retry_exhausted');
+      expect(webhookDb.setWebhookChainCooldown).not.toHaveBeenCalled();
+      expect(webhookDb.addWebhookRunEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runId: 'run-2',
+          chainId: 'chain-2',
+          eventType: 'retry_exhausted',
+          status: 'paused',
+        })
       );
       expect((adapter as any).sendMessage).toHaveBeenCalled();
     });

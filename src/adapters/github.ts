@@ -16,11 +16,29 @@ import { readdir, access } from 'fs/promises';
 import { join } from 'path';
 import {
   buildWebhookDedupeKey,
+  computeRetryCooldownUntil,
   deriveWebhookDeliveryId,
+  evaluateAutonomousRetryPolicy,
+  WEBHOOK_RUN_REASONS,
 } from '../utils/webhook-control-plane';
-import { evaluateWebhookPolicy } from '../utils/webhook-policy';
+import { evaluateWebhookPolicy, WebhookRiskTier } from '../utils/webhook-policy';
 
 const execAsync = promisify(exec);
+
+function parsePositiveInteger(rawValue: string | undefined, fallback: number): number {
+  const parsed = Number.parseInt(rawValue ?? '', 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function resolveRetryCooldownSeconds(): { baseSeconds: number; maxJitterSeconds: number } {
+  return {
+    baseSeconds: parsePositiveInteger(process.env.WEBHOOK_RETRY_COOLDOWN_SECONDS, 120),
+    maxJitterSeconds: parsePositiveInteger(process.env.WEBHOOK_RETRY_COOLDOWN_JITTER_SECONDS, 30),
+  };
+}
 
 interface WebhookEvent {
   action: string;
@@ -74,6 +92,7 @@ interface WebhookMetadata {
 interface WebhookProcessContext {
   runId: string;
   chainId: string;
+  riskTier: WebhookRiskTier;
   event: WebhookEvent;
   parsed: {
     owner: string;
@@ -692,6 +711,7 @@ ${triage.technical_summary}
       context: {
         runId: intake.run.id,
         chainId: intake.chain.id,
+        riskTier: intake.run.risk_tier ?? 'medium',
         event,
         parsed: {
           owner,
@@ -710,7 +730,7 @@ ${triage.technical_summary}
    * Process an accepted webhook asynchronously.
    */
   async processWebhook(context: WebhookProcessContext): Promise<void> {
-    const { runId, chainId, parsed } = context;
+    const { runId, chainId, riskTier, parsed } = context;
     const { owner, repo, number, comment, eventType, issue, pullRequest } = parsed;
     const conversationId = this.buildConversationId(owner, repo, number);
 
@@ -796,11 +816,70 @@ Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
     } catch (error) {
       console.error('[GitHub] Message handling error:', error);
       const message = error instanceof Error ? error.message : String(error);
-      const failure = await webhookDb.registerWebhookFailure(chainId, runId, message);
+      const retryPolicy = evaluateAutonomousRetryPolicy({
+        riskTier,
+        repeatedFailureCount: 1,
+      });
+      const failure = await webhookDb.registerWebhookFailure(
+        chainId,
+        runId,
+        message,
+        retryPolicy.maxAttempts
+      );
+      const retryDecision = evaluateAutonomousRetryPolicy({
+        riskTier,
+        repeatedFailureCount: failure.repeatedFailureCount,
+      });
+      try {
+        if (retryDecision.shouldRetry && !retryDecision.shouldPause) {
+          const { baseSeconds, maxJitterSeconds } = resolveRetryCooldownSeconds();
+          const cooldownUntil = computeRetryCooldownUntil({
+            now: new Date(),
+            baseSeconds,
+            maxJitterSeconds,
+            seed: `${chainId}:${runId}:${String(failure.repeatedFailureCount)}`,
+          });
+          await webhookDb.setWebhookChainCooldown(chainId, cooldownUntil);
+          await webhookDb.addWebhookRunEvent({
+            runId,
+            chainId,
+            eventType: 'retry_scheduled',
+            status: 'blocked_policy',
+            message: `Retry scheduled after failure ${String(failure.repeatedFailureCount)} of ${String(retryDecision.maxAttempts)}.`,
+            metadata: {
+              reason: retryDecision.reason,
+              riskTier,
+              repeatedFailureCount: failure.repeatedFailureCount,
+              maxAttempts: retryDecision.maxAttempts,
+              cooldownUntil: cooldownUntil.toISOString(),
+              baseCooldownSeconds: baseSeconds,
+              maxJitterSeconds,
+            },
+          });
+        } else {
+          await webhookDb.addWebhookRunEvent({
+            runId,
+            chainId,
+            eventType: 'retry_exhausted',
+            status: 'paused',
+            message: `Retry budget exhausted after ${String(failure.repeatedFailureCount)} failures.`,
+            metadata: {
+              reason: retryDecision.reason,
+              riskTier,
+              repeatedFailureCount: failure.repeatedFailureCount,
+              maxAttempts: retryDecision.maxAttempts,
+            },
+          });
+        }
+      } catch (controlPlaneError) {
+        console.warn('[GitHub] Failed to update retry control-plane metadata:', controlPlaneError);
+      }
       await webhookDb.finalizeWebhookRun(
         runId,
-        failure.shouldPause ? 'paused' : 'blocked_policy',
-        failure.shouldPause ? 'repeated_failure_signature' : 'processing_error'
+        retryDecision.shouldPause ? 'paused' : 'blocked_policy',
+        retryDecision.shouldPause
+          ? WEBHOOK_RUN_REASONS.RETRY_EXHAUSTED
+          : WEBHOOK_RUN_REASONS.RETRY_SCHEDULED
       );
       await this.sendMessage(conversationId, 'Warning: an error occurred. Please try again or use /reset.');
     }

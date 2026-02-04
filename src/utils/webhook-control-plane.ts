@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { WebhookRiskTier } from './webhook-policy';
 
 export type WebhookRunStatus =
   | 'accepted'
@@ -7,6 +8,19 @@ export type WebhookRunStatus =
   | 'requires_approval'
   | 'executed'
   | 'paused';
+
+export const WEBHOOK_RUN_REASONS = {
+  RETRY_SCHEDULED: 'retry_scheduled',
+  RETRY_EXHAUSTED: 'retry_exhausted',
+  COOLDOWN_ACTIVE: 'cooldown_active',
+  BACKPRESSURE_ACTIVE: 'backpressure_active',
+  ABORTED_GUARDRAIL: 'aborted_guardrail',
+  SUCCEEDED: 'succeeded',
+  APPROVAL_REQUIRED: 'approval_required',
+} as const;
+
+export type WebhookRunReasonCode =
+  (typeof WEBHOOK_RUN_REASONS)[keyof typeof WEBHOOK_RUN_REASONS];
 
 export interface DedupeKeyInput {
   deliveryId: string;
@@ -31,6 +45,25 @@ export interface GuardrailEvaluationInput {
 export interface GuardrailEvaluation {
   allowed: boolean;
   reason?: 'chain_paused' | 'cooldown_active' | 'iteration_budget_exceeded' | 'mutating_budget_exceeded';
+}
+
+export interface AutonomousRetryPolicyInput {
+  riskTier: WebhookRiskTier;
+  repeatedFailureCount: number;
+}
+
+export interface AutonomousRetryPolicyDecision {
+  shouldRetry: boolean;
+  shouldPause: boolean;
+  maxAttempts: number;
+  reason: 'retry_scheduled' | 'retry_exhausted';
+}
+
+interface RetryCooldownInput {
+  now: Date;
+  baseSeconds: number;
+  maxJitterSeconds: number;
+  seed: string;
 }
 
 export function isTerminalWebhookRunStatus(status: WebhookRunStatus): boolean {
@@ -79,6 +112,69 @@ export function evaluateWebhookGuardrails(input: GuardrailEvaluationInput): Guar
   }
 
   return { allowed: true };
+}
+
+function parseRetryAttempts(name: string, fallback: number): number {
+  const raw = process.env[name];
+  const parsed = Number.parseInt(raw ?? '', 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+export function resolveMaxRetryAttempts(riskTier: WebhookRiskTier): number {
+  switch (riskTier) {
+    case 'high':
+      return parseRetryAttempts('WEBHOOK_MAX_RETRIES_HIGH_RISK', 1);
+    case 'medium':
+      return parseRetryAttempts('WEBHOOK_MAX_RETRIES_MEDIUM_RISK', 2);
+    case 'low':
+      return parseRetryAttempts('WEBHOOK_MAX_RETRIES_LOW_RISK', 3);
+    default:
+      return 1;
+  }
+}
+
+export function evaluateAutonomousRetryPolicy(
+  input: AutonomousRetryPolicyInput
+): AutonomousRetryPolicyDecision {
+  const maxAttempts = resolveMaxRetryAttempts(input.riskTier);
+  if (input.repeatedFailureCount >= maxAttempts) {
+    return {
+      shouldRetry: false,
+      shouldPause: true,
+      maxAttempts,
+      reason: 'retry_exhausted',
+    };
+  }
+
+  return {
+    shouldRetry: true,
+    shouldPause: false,
+    maxAttempts,
+    reason: 'retry_scheduled',
+  };
+}
+
+export function computeDeterministicJitterSeconds(seed: string, maxJitterSeconds: number): number {
+  const safeMax = Math.max(maxJitterSeconds, 0);
+  if (safeMax === 0) {
+    return 0;
+  }
+
+  const hex = createHash('sha256').update(seed).digest('hex').slice(0, 8);
+  const value = Number.parseInt(hex, 16);
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+  return value % (safeMax + 1);
+}
+
+export function computeRetryCooldownUntil(input: RetryCooldownInput): Date {
+  const jitterSeconds = computeDeterministicJitterSeconds(input.seed, input.maxJitterSeconds);
+  const totalSeconds = Math.max(input.baseSeconds, 0) + jitterSeconds;
+  return new Date(input.now.getTime() + totalSeconds * 1000);
 }
 
 export function buildFailureSignature(errorMessage: string, exitCode: number, failingTests: string[]): string {
