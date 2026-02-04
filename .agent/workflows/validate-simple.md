@@ -14,8 +14,8 @@ Check for (read-only):
 - Makefile targets
 - CI workflow hints (e.g. `.github/workflows/*`)
 
-## Step 1) Propose commands (do not auto-run)
-Choose the best matching commands from the repo. Typical examples:
+## Step 1) Select and run commands
+Choose the best matching commands from the repo and **run them** (do not just propose). Typical examples:
 
 ### Node/TS (examples — use only if present)
 - `npm run lint`
@@ -29,8 +29,8 @@ Choose the best matching commands from the repo. Typical examples:
 - `pytest -q`
 - `python -m build` (if packaging)
 
-## Step 2) Execute (after approval) + report
-Report results:
+## Step 2) Report results
+Report:
 - Lint: pass/fail + key errors
 - Type-check: pass/fail
 - Tests: pass/fail + counts

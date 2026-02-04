@@ -24,8 +24,12 @@ If only one value is provided, treat it as the plan path and derive a branch nam
 If the plan does not contain an Issue reference:
 - Output an Issue Draft first, then continue.
 
-## Step 2) Prepare branch (propose commands)
-Propose (do not auto-run) the exact commands to:
+## Step 2) Prepare branch
+Run the exact commands below (do not just propose them).
+Use the repo default branch from `.agent/rules/00-core.md` (this repo: `stable`) or derive it via
+`git symbolic-ref refs/remotes/origin/HEAD` so you never assume `main`.
+
+Run the exact commands to:
 - confirm status
 - create/switch to the branch
 - sync with base branch (as per repo rules)
@@ -47,8 +51,8 @@ Add a short checkpoint after each slice using this format:
 - `Evidence:` tests/checks or concrete signal for this slice
 - `Next:` exact next slice action
 
-## Step 4) Verification (propose commands)
-Propose the repo-appropriate validation commands (prefer existing scripts):
+## Step 4) Verification
+Run the repo-appropriate validation commands (prefer existing scripts) and record results:
 - lint / format check
 - type-check
 - tests (unit/integration/e2e as needed)
