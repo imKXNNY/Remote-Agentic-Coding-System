@@ -10,11 +10,12 @@ Use after the branch is complete and validated.
 ## 1) Pre-flight
 Read `.agent/rules/00-core.md` for PR conventions and DoD.
 
-## 2) Sync with base branch (propose commands)
+## 2) Sync with base branch
+Run these commands (do not just propose them).
 - Confirm branch: `git status -sb`
 - Fetch: `git fetch origin`
 - Rebase (preferred): `git rebase origin/<base>`
-  - Base defaults to `main` unless `$ARGUMENTS` provided
+  - Base defaults to `stable` (or resolve `origin/HEAD`) unless `$ARGUMENTS` provided
 - Push (if rebased): use `--force-with-lease`
 
 ## 3) Validation
@@ -22,7 +23,7 @@ Read `.agent/rules/00-core.md` for PR conventions and DoD.
 - Use `.agent/workflows/validate.md` if repo DoD requires it
 
 ## 4) Open PR (GitHub CLI preferred)
-Propose:
+Run:
 - `gh pr create`
 
 PR requirements:

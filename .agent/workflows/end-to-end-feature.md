@@ -7,6 +7,10 @@ argument-hint: [issue-id or feature-description]
 
 This workflow chains the core workflows in canonical paths.
 
+Important:
+- Execute all steps sequentially in a single run.
+- Do not pause between steps or ask for confirmation unless a hard blocker requires user input.
+
 ## 1) Prime
 Run: `.agent/workflows/prime.md`
 

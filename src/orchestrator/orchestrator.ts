@@ -15,12 +15,19 @@ import { substituteVariables } from '../utils/variable-substitution';
 import { getAssistantClient } from '../clients/factory';
 import * as bootstrap from '../utils/bootstrap';
 
+type HandleMessageErrorStrategy = 'notify' | 'throw' | 'notify-throw';
+
+interface HandleMessageOptions {
+  errorStrategy?: HandleMessageErrorStrategy;
+}
+
 export async function handleMessage(
   platform: IPlatformAdapter,
   conversationId: string,
   message: string,
   issueContext?: string, // Optional GitHub issue/PR context to append AFTER command loading
-  attachments: string[] = [] // Optional attachments (paths)
+  attachments: string[] = [], // Optional attachments (paths)
+  options: HandleMessageOptions = {}
 ): Promise<void> {
   try {
     console.log(`[Orchestrator] Handling message for conversation ${conversationId}`);
@@ -307,9 +314,15 @@ Issue: ${linked.owner}/${linked.repo}#${String(linked.number)}${issueTitle}
     console.log('[Orchestrator] Message handling complete');
   } catch (error) {
     console.error('[Orchestrator] Error:', error);
-    await platform.sendMessage(
-      conversationId,
-      '⚠️ An error occurred. Try /reset to start a fresh session.'
-    );
+    const errorStrategy = options.errorStrategy ?? 'notify';
+    if (errorStrategy !== 'throw') {
+      await platform.sendMessage(
+        conversationId,
+        '⚠️ An error occurred. Try /reset to start a fresh session.'
+      );
+    }
+    if (errorStrategy !== 'notify') {
+      throw error;
+    }
   }
 }

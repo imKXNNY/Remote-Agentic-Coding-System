@@ -23,6 +23,9 @@ RUN curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | d
     && apt-get install -y gh \
     && rm -rf /var/lib/apt/lists/*
 
+# Install Codex + Claude Code CLIs
+RUN npm install -g @openai/codex @anthropic-ai/claude-code
+
 # Create non-root user for running Claude Code
 # Claude Code refuses to run with --dangerously-skip-permissions as root for security
 RUN useradd -m -u 1001 -s /bin/bash appuser \

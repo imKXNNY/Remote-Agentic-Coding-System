@@ -7,7 +7,8 @@ description: Create an atomic commit for current changes
 ## Goal
 Create a clean, atomic commit that references the relevant Issue.
 
-## Steps (propose commands)
+## Steps
+Run these commands (do not just propose them).
 1) Inspect changes:
 - `git status`
 - `git diff HEAD`
