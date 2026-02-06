@@ -11,7 +11,7 @@ run_id: _TBD_RUN_ID_
 policy_override: "--policy-override"
 ---
 
-This document captures the artifact trail confirming that the Issue #49 dry-run workflow completed under the Issue #57 docs-only policy override. Inputs and evidence align with the automation playbook and checklist to keep the audit story deterministic.
+This document captures the artifact trail confirming that the Issue #49 dry-run workflow completed under the Issue #57 docs-only policy override. Inputs and evidence align with the automation playbook and checklist to keep the audit story deterministic, so pair this proof with `full-auto-dry-run-playbook.md` and `full-auto-dry-run-checklist.md` for full operator context.
 
 | Stage    | Status | Evidence |
 | --- | --- | --- |
@@ -29,7 +29,7 @@ This document captures the artifact trail confirming that the Issue #49 dry-run 
 - Policy override justification: Docs-only validation for Issue #57 to surface Issue #49 completion evidence
 - Reminder: follow Section 2/3 of `full-auto-dry-run-playbook.md` for audit logging
 
-## Branch & Plan Mapping
+## Branch ↔ Plan Mapping
 - Branch: `feature/57-policy-override` (created by automation)
 - Plan: `.agent/plans/57-policy-override.md` (deterministic inputs)
 - Expected PR: `_TBD_PR_URL` referencing Issues #57 and #49
