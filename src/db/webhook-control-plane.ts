@@ -564,15 +564,15 @@ export async function registerWebhookFailure(
 
     const chainUpdate = await client.query<{ repeated_failure_count: number }>(
       `UPDATE remote_agent_automation_chains
-       SET last_failure_signature = $2,
+       SET last_failure_signature = $2::varchar(128),
            repeated_failure_count = CASE
-             WHEN last_failure_signature = $2 THEN repeated_failure_count + 1
+             WHEN last_failure_signature = $2::varchar(128) THEN repeated_failure_count + 1
              ELSE 1
            END,
            status = CASE
              WHEN (
                CASE
-                 WHEN last_failure_signature = $2 THEN repeated_failure_count + 1
+                 WHEN last_failure_signature = $2::varchar(128) THEN repeated_failure_count + 1
                  ELSE 1
                END
              ) >= $3
@@ -587,7 +587,7 @@ export async function registerWebhookFailure(
 
     await client.query(
       `UPDATE remote_agent_automation_runs
-       SET failure_signature = $2
+       SET failure_signature = $2::varchar(128)
        WHERE id = $1`,
       [runId, signature]
     );
@@ -911,6 +911,40 @@ export async function overrideWebhookChainCooldown(
       reason,
       metadata: {
         repositoryFullName: chain.repository_full_name,
+      },
+    });
+  }
+  return chain;
+}
+
+export async function overrideWebhookChainIterationBudget(
+  chainId: string,
+  repositoryFullName: string,
+  actor: string,
+  reason: string
+): Promise<WebhookChain | null> {
+  const result = await pool.query<WebhookChain>(
+    `UPDATE remote_agent_automation_chains
+     SET iteration_count = 0,
+         iteration_window_started_at = NOW(),
+         status = CASE WHEN status = 'paused' THEN 'active' ELSE status END,
+         updated_at = NOW()
+     WHERE id = $1
+       AND repository_full_name = $2
+     RETURNING *`,
+    [chainId, repositoryFullName]
+  );
+  const chain = result.rows.length > 0 ? result.rows[0] : null;
+  if (chain) {
+    await recordAutomationOverride({
+      scopeType: 'chain',
+      scopeKey: chain.id,
+      action: 'override_iteration_budget',
+      actor,
+      reason,
+      metadata: {
+        repositoryFullName: chain.repository_full_name,
+        iterationWindowStartedAt: chain.iteration_window_started_at,
       },
     });
   }

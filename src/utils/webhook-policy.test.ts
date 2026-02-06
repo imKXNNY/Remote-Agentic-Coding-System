@@ -79,6 +79,18 @@ describe('webhook-policy evaluator', () => {
     expect(result.reason).toBe('branch_not_allowed');
   });
 
+  test('override token bypasses branch restriction for low-risk command', () => {
+    const result = evaluateWebhookPolicy({
+      repositoryFullName: 'imKXNNY/Remote-Agentic-Coding-System',
+      targetBranch: 'stable',
+      commandText: '/command-invoke update docs/readme.md --policy-override',
+      isMutating: true,
+    });
+    expect(result.decision).toBe('allow');
+    expect(result.reason).toBe('policy_allow');
+    expect(result.riskTier).toBe('low');
+  });
+
   test('allows safe read-only command', () => {
     const result = evaluateWebhookPolicy({
       repositoryFullName: 'imKXNNY/Remote-Agentic-Coding-System',

@@ -95,6 +95,8 @@ export function evaluateWebhookPolicy(input: WebhookPolicyInput): WebhookPolicyR
     '/validate-simple',
     '/execution-report',
     '/command-invoke',
+    '/load-commands',
+    '/commands',
     'approve-run',
   ]).map(command => command.toLowerCase());
   const protectedPaths = parseCsv(process.env.WEBHOOK_POLICY_PROTECTED_PATHS, [
@@ -124,7 +126,7 @@ export function evaluateWebhookPolicy(input: WebhookPolicyInput): WebhookPolicyR
     return { decision: 'blocked', reason: 'protected_path_blocked', riskTier };
   }
 
-  if (input.isMutating && !matchesAny(input.targetBranch, allowedBranches)) {
+  if (input.isMutating && !matchesAny(input.targetBranch, allowedBranches) && !hasOverride) {
     return { decision: 'requires_approval', reason: 'branch_not_allowed', riskTier };
   }
 

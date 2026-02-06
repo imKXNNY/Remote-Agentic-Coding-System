@@ -80,6 +80,7 @@ jest.mock('../db/webhook-control-plane', () => ({
   pauseWebhookChain: jest.fn(),
   resumeWebhookChain: jest.fn(),
   overrideWebhookChainCooldown: jest.fn(),
+  overrideWebhookChainIterationBudget: jest.fn(),
   overrideRepositoryCircuitBreaker: jest.fn(),
   approveWebhookRun: jest.fn(),
   recordRepositoryAutomationOverride: jest.fn(),
@@ -99,6 +100,7 @@ describe('GitHubAdapter', () => {
     pauseWebhookChain: jest.Mock;
     resumeWebhookChain: jest.Mock;
     overrideWebhookChainCooldown: jest.Mock;
+    overrideWebhookChainIterationBudget: jest.Mock;
     overrideRepositoryCircuitBreaker: jest.Mock;
     approveWebhookRun: jest.Mock;
     recordRepositoryAutomationOverride: jest.Mock;
@@ -363,6 +365,42 @@ describe('GitHubAdapter', () => {
       expect(result.httpStatus).toBe(403);
       expect(result.body).toEqual(expect.objectContaining({ status: 'approval_denied' }));
       expect(webhookDb.approveWebhookRun).not.toHaveBeenCalled();
+    });
+
+    test('override-iteration command resets iteration budget for maintainer', async () => {
+      webhookDb.overrideWebhookChainIterationBudget.mockResolvedValueOnce({ id: 'chain-9' });
+
+      const payload = JSON.stringify({
+        action: 'created',
+        issue: { number: 31, title: 'x', body: 'y', user: { login: 'u' }, labels: [], state: 'open' },
+        comment: { body: '@remote-agent override-iteration chain-9 needs more steps', user: { login: 'u' } },
+        repository: {
+          owner: { login: 'imKXNNY' },
+          name: 'Remote-Agentic-Coding-System',
+          full_name: 'imKXNNY/Remote-Agentic-Coding-System',
+          html_url: 'https://github.com/imKXNNY/Remote-Agentic-Coding-System',
+          default_branch: 'stable',
+        },
+        sender: { login: 'maintainer' },
+      });
+
+      jest.spyOn(adapter as any, 'verifySignature').mockReturnValue(true);
+      const result = await adapter.ingestWebhook(payload, 'sha256=fake');
+
+      expect(result.httpStatus).toBe(200);
+      expect(result.body).toEqual(
+        expect.objectContaining({
+          status: 'control_applied',
+          action: 'override_iteration_budget',
+          chainId: 'chain-9',
+        })
+      );
+      expect(webhookDb.overrideWebhookChainIterationBudget).toHaveBeenCalledWith(
+        'chain-9',
+        'imKXNNY/Remote-Agentic-Coding-System',
+        'maintainer',
+        'needs more steps'
+      );
     });
 
     test('returns deduped intake result for duplicate delivery', async () => {

@@ -336,6 +336,14 @@ export class GitHubAdapter implements IPlatformAdapter {
     return { chainId: match[1], reason: match[2].trim() };
   }
 
+  private extractOverrideIterationCommand(comment: string): ChainControlCommand | null {
+    const match = /^override-iteration\s+([a-zA-Z0-9-]+)\s+(.+)/i.exec(comment.trim());
+    if (!match) {
+      return null;
+    }
+    return { chainId: match[1], reason: match[2].trim() };
+  }
+
   private extractOverrideCircuitBreakerReason(comment: string): string | null {
     const match = /^override-circuit-breaker\s+(.+)/i.exec(comment.trim());
     if (!match) {
@@ -815,6 +823,7 @@ ${triage.technical_summary}
     const pauseLoopCommand = this.extractPauseLoopCommand(strippedComment);
     const resumeLoopCommand = this.extractResumeLoopCommand(strippedComment);
     const overrideCooldownCommand = this.extractOverrideCooldownCommand(strippedComment);
+    const overrideIterationCommand = this.extractOverrideIterationCommand(strippedComment);
     const overrideCircuitBreakerReason = this.extractOverrideCircuitBreakerReason(strippedComment);
     const mergeGateCommand = this.extractMergeGateCommand(strippedComment);
     const autoMergeCommand = this.extractAutoMergeCommand(strippedComment);
@@ -822,6 +831,7 @@ ${triage.technical_summary}
       pauseLoopCommand ||
       resumeLoopCommand ||
       overrideCooldownCommand ||
+      overrideIterationCommand ||
       overrideCircuitBreakerReason ||
       mergeGateCommand ||
       autoMergeCommand
@@ -1024,6 +1034,36 @@ ${triage.technical_summary}
             status: 'control_applied',
             action: 'override_cooldown',
             chainId: cooldownOverrideChain.id,
+            actor,
+          },
+          shouldProcess: false,
+        };
+      }
+
+      if (overrideIterationCommand) {
+        const updatedChain = await webhookDb.overrideWebhookChainIterationBudget(
+          overrideIterationCommand.chainId,
+          event.repository.full_name,
+          actor,
+          overrideIterationCommand.reason
+        );
+        if (!updatedChain) {
+          return {
+            httpStatus: 404,
+            body: {
+              status: 'control_not_found',
+              action: 'override_iteration_budget',
+              chainId: overrideIterationCommand.chainId,
+            },
+            shouldProcess: false,
+          };
+        }
+        return {
+          httpStatus: 200,
+          body: {
+            status: 'control_applied',
+            action: 'override_iteration_budget',
+            chainId: updatedChain.id,
             actor,
           },
           shouldProcess: false,
@@ -1252,7 +1292,9 @@ Use 'gh pr view ${String(pullRequest.number)}' for full details if needed.`;
         }
       }
 
-      await handleMessage(this, conversationId, finalMessage, contextToAppend);
+      await handleMessage(this, conversationId, finalMessage, contextToAppend, [], {
+        errorStrategy: 'throw',
+      });
       await webhookDb.finalizeWebhookRun(runId, 'executed');
     } catch (error) {
       console.error('[GitHub] Message handling error:', error);

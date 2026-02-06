@@ -46,6 +46,16 @@ Expected response payload:
 - `status: control_applied`
 - `action: override_cooldown`
 
+### Override iteration budget
+
+```text
+@remote-agent override-iteration <chain-id> <reason>
+```
+
+Expected response payload:
+- `status: control_applied`
+- `action: override_iteration_budget`
+
 ### Override repository circuit breaker
 
 ```text
